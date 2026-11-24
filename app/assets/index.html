@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#101827">
+<title>EvenGlass</title>
+<style>
+:root{--bg:#101827;--card:#17243a;--line:#50637f;--txt:#eef4ff;--mut:#a5b7cf;--g:#70efb3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:16px system-ui,sans-serif}
+main{max-width:820px;margin:auto;padding:14px 14px 40px}
+h1{font-size:21px;margin:4px 0 10px}h1 span{color:var(--mut);font-size:14px;font-weight:400}
+nav{display:flex;gap:6px;margin-bottom:12px}
+nav button{flex:1}
+button,select,input{background:#273953;color:#fff;border:1px solid var(--line);border-radius:12px;padding:11px;font-size:15px}
+button:active{background:#41638c}button.on{background:#2f6b55;border-color:var(--g)}
+button:disabled{opacity:.5}
+.cam{position:relative;background:#000;border-radius:14px;overflow:hidden;aspect-ratio:3/4;max-height:58vh;width:100%}
+video,#shot{width:100%;height:100%;object-fit:cover;display:block}
+#shot{position:absolute;inset:0;display:none}
+.bar{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.bar button{flex:1;min-width:110px}
+.big{font-size:18px;font-weight:600;background:#2f6b55;border-color:var(--g)}
+.card{background:var(--card);border-radius:14px;padding:14px;margin:10px 0;white-space:pre-wrap;line-height:1.65}
+.card h3{margin:0 0 6px;font-size:14px;color:var(--mut);font-weight:500}
+.glass{background:#020a0a;color:var(--g);font-size:22px;line-height:1.6;max-width:430px}
+.mut{color:var(--mut);font-size:13px}
+.hide{display:none!important}
+label{display:block;margin:10px 0 4px;color:var(--mut);font-size:14px}
+input,select{width:100%}
+textarea{width:100%;min-height:70px;background:var(--card);color:#fff;border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--mut);border-top-color:transparent;border-radius:50%;animation:s 1s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes s{to{transform:rotate(360deg)}}
+</style></head><body><main>
+<h1>EvenGlass <span>카메라 번역 · 학습 · 프롬프터</span></h1>
+<nav>
+<button data-tab="tr" class="on">일→한 번역</button>
+<button data-tab="st">학습 도우미</button>
+<button data-tab="pr">프롬프터</button>
+<button data-tab="set">설정</button>
+</nav>
+
+<section id="camwrap">
+  <div class="cam"><video id="video" playsinline muted autoplay></video><canvas id="shot"></canvas></div>
+  <div class="bar">
+    <button id="capture" class="big">📷 촬영</button>
+    <button id="retake" class="hide">다시 촬영</button>
+    <button id="flip">카메라 전환</button>
+  </div>
+  <p id="camerr" class="mut"></p>
+</section>
+
+<section id="tab-tr">
+  <div class="bar"><button id="doTr" disabled>번역하기</button><button id="g2">G2 화면 미리보기</button></div>
+  <p id="trStatus" class="mut"></p>
+  <div class="card" id="trOrig"><h3>일본어 원문</h3><div id="orig">촬영 후 [번역하기]를 누르세요.</div></div>
+  <div class="card" id="trKoBox"><h3>한국어 번역</h3><div id="ko"></div></div>
+</section>
+
+<section id="tab-st" class="hide">
+  <label>질문 (선택)</label>
+  <textarea id="q" placeholder="예: 이 문제를 단계별로 풀어줘 / 핵심 개념만 정리해줘"></textarea>
+  <div class="bar"><button id="doSt" disabled>풀이 요청</button></div>
+  <p id="stStatus" class="mut"></p>
+  <div class="card" id="stOut"><h3>풀이</h3><div id="ans">Gemini API 키가 필요합니다(설정 탭).</div></div>
+</section>
+
+<section id="tab-set" class="hide">
+  <div class="card" style="white-space:normal">
+  <label>Gemini API 키 (이 기기에만 저장)</label>
+  <input id="key" type="password" placeholder="AIza..." autocomplete="off">
+  <label>Gemini 모델</label>
+  <input id="model" value="gemini-2.5-flash">
+  <label>번역 엔진</label>
+  <select id="engine">
+    <option value="auto">자동 (키 있으면 Gemini, 없으면 무료 OCR+번역)</option>
+    <option value="gemini">Gemini 비전 (정확도 높음)</option>
+    <option value="free">무료: Tesseract OCR + MyMemory 번역</option>
+  </select>
+  <div class="bar"><button id="saveSet">저장</button><button id="clearKey">키 삭제</button></div>
+  <p class="mut">키는 휴대폰 앱 저장소(localStorage)에만 보관되며 소스/깃허브에는 포함되지 않습니다. 무료 모드는 첫 실행 시 일본어 OCR 데이터(약 수 MB)를 내려받고, MyMemory 번역은 하루 사용량 제한이 있습니다.</p>
+  <p class="mut" id="ver">EvenGlass 0.1.0 · G2 안경 실제 연동은 아직 미지원(미리보기만)</p>
+  </div>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js" defer></script>
+<script>
+const $=id=>document.getElementById(id);
+const S={get k(){return localStorage.getItem('eg-key')||''},get m(){return localStorage.getItem('eg-model')||'gemini-2.5-flash'},get e(){return localStorage.getItem('eg-engine')||'auto'}};
+let stream=null,facing='environment',shotData=null;
+
+// ---------- tabs ----------
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
+  const t=b.dataset.tab;
+  if(t==='pr'){location.href='prompter.html';return}
+  document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on',x===b));
+  ['tr','st','set'].forEach(n=>$('tab-'+n).classList.toggle('hide',n!==t));
+  $('camwrap').classList.toggle('hide',t==='set');
+});
+
+// ---------- camera ----------
+async function startCam(){
+  if(stream)stream.getTracks().forEach(t=>t.stop());
+  $('camerr').textContent='';
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:facing,width:{ideal:1920},height:{ideal:1440}},audio:false});
+    $('video').srcObject=stream;await $('video').play();
+  }catch(e){$('camerr').textContent='카메라를 열 수 없습니다: '+e.message+' (앱 권한에서 카메라를 허용한 뒤 다시 실행하세요)';setTimeout(startCam,2500)}
+}
+$('flip').onclick=()=>{facing=facing==='environment'?'user':'environment';startCam()};
+$('capture').onclick=()=>{
+  const v=$('video');if(!v.videoWidth)return;
+  const max=1600,sc=Math.min(1,max/Math.max(v.videoWidth,v.videoHeight));
+  const c=$('shot');c.width=Math.round(v.videoWidth*sc);c.height=Math.round(v.videoHeight*sc);
+  c.getContext('2d').drawImage(v,0,0,c.width,c.height);
+  shotData=c.toDataURL('image/jpeg',0.85);
+  c.style.display='block';$('capture').classList.add('hide');$('retake').classList.remove('hide');
+  $('doTr').disabled=false;$('doSt').disabled=false;
+};
+$('retake').onclick=()=>{shotData=null;$('shot').style.display='none';$('capture').classList.remove('hide');$('retake').classList.add('hide');$('doTr').disabled=true;$('doSt').disabled=true};
+
+// ---------- Gemini ----------
+async function gemini(prompt,json){
+  const key=S.k;if(!key)throw new Error('설정 탭에서 Gemini API 키를 입력하세요.');
+  const body={contents:[{parts:[{text:prompt},{inline_data:{mime_type:'image/jpeg',data:shotData.split(',')[1]}}]}]};
+  if(json)body.generationConfig={response_mime_type:'application/json'};
+  const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(S.m)}:generateContent`,{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},body:JSON.stringify(body)});
+  const j=await r.json();
+  if(!r.ok)throw new Error((j.error&&j.error.message)||('HTTP '+r.status));
+  return (j.candidates?.[0]?.content?.parts||[]).map(p=>p.text||'').join('');
+}
+
+// ---------- free path ----------
+let worker=null;
+async function ocrJpn(status){
+  if(!window.Tesseract)throw new Error('OCR 라이브러리를 불러오지 못했습니다(인터넷 연결 확인).');
+  if(!worker){status('일본어 OCR 데이터 준비 중… (첫 실행만 오래 걸림)');worker=await Tesseract.createWorker('jpn');}
+  status('문자 인식 중…');
+  const {data}=await worker.recognize(shotData);
+  return data.text.replace(/[ \t]+/g,'').replace(/\n{2,}/g,'\n').trim();
+}
+async function myMemory(text,status){
+  const lines=text.split('\n').filter(Boolean),chunks=[];let cur='';
+  for(const l of lines){if((cur+l).length>450){if(cur)chunks.push(cur);cur=l}else cur=cur?cur+'\n'+l:l}
+  if(cur)chunks.push(cur);
+  const out=[];
+  for(let i=0;i<chunks.length;i++){
+    status(`번역 중… (${i+1}/${chunks.length})`);
+    const r=await fetch('https://api.mymemory.translated.net/get?langpair=ja|ko&q='+encodeURIComponent(chunks[i]));
+    const j=await r.json();out.push(j.responseData?.translatedText||'');
+  }
+  return out.join('\n');
+}
+
+// ---------- translate ----------
+$('doTr').onclick=async()=>{
+  const st=t=>$('trStatus').innerHTML=t?'<span class="spin"></span>'+t:'';
+  $('doTr').disabled=true;$('orig').textContent='';$('ko').textContent='';
+  try{
+    const useG=S.e==='gemini'||(S.e==='auto'&&S.k);
+    if(useG){
+      st('Gemini로 인식·번역 중…');
+      const t=await gemini('이미지에 보이는 일본어 텍스트를 모두 정확히 추출하고 자연스러운 한국어로 번역하세요. 읽는 순서(세로쓰기 포함)를 지키세요. JSON으로만 답하세요: {"original":"일본어 원문","korean":"한국어 번역"}. 일본어가 없으면 original을 빈 문자열로.',true);
+      let o;try{o=JSON.parse(t.replace(/^```json|```$/g,''))}catch{o={original:'',korean:t}}
+      $('orig').textContent=o.original||'(일본어를 찾지 못했습니다)';$('ko').textContent=o.korean||'';
+    }else{
+      const txt=await ocrJpn(st);
+      $('orig').textContent=txt||'(일본어를 찾지 못했습니다)';
+      if(txt)$('ko').textContent=await myMemory(txt,st);
+    }
+    st('');
+  }catch(e){st('');$('trStatus').textContent='오류: '+e.message}
+  $('doTr').disabled=false;
+};
+$('g2').onclick=()=>{const on=$('trKoBox').classList.toggle('glass');$('g2').textContent=on?'일반 화면':'G2 화면 미리보기'};
+
+// ---------- study ----------
+$('doSt').onclick=async()=>{
+  $('doSt').disabled=true;$('stStatus').innerHTML='<span class="spin"></span>Gemini 분석 중…';$('ans').textContent='';
+  try{
+    const q=$('q').value.trim()||'이 이미지의 문제를 단계별로 풀이하고, 핵심 개념과 최종 답을 정리해 주세요.';
+    $('ans').textContent=await gemini('당신은 친절한 학습 도우미입니다. 한국어로 답하세요. 수식은 읽기 쉬운 일반 텍스트로 쓰세요.\n요청: '+q,false);
+    $('stStatus').textContent='';
+  }catch(e){$('stStatus').textContent='오류: '+e.message}
+  $('doSt').disabled=false;
+};
+
+// ---------- settings ----------
+$('key').value=S.k;$('model').value=S.m;$('engine').value=S.e;
+$('saveSet').onclick=()=>{localStorage.setItem('eg-key',$('key').value.trim());localStorage.setItem('eg-model',$('model').value.trim()||'gemini-2.5-flash');localStorage.setItem('eg-engine',$('engine').value);alertBox('저장했습니다.')};
+$('clearKey').onclick=()=>{localStorage.removeItem('eg-key');$('key').value='';alertBox('키를 삭제했습니다.')};
+function alertBox(t){$('ver').textContent=t;setTimeout(()=>$('ver').textContent='EvenGlass 0.1.0 · G2 안경 실제 연동은 아직 미지원(미리보기만)',2000)}
+
+startCam();
+</script></main></body></html>

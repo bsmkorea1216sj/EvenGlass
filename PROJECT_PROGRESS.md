@@ -15,17 +15,25 @@ Build a Samsung Galaxy Android APK that retains the existing camera-based study/
 - Display translations on the Galaxy screen first.
 - G2 integration is a separate future phase; SDK capability is not verified.
 
-## Actual status
-- Requirements gathered; existing HTML source located.
-- No completed Android integration, APK build, or Galaxy installation test.
-- No APK email has been sent.
+## Actual status (updated 2026-11-24)
+- Android project added under `app/` (apktool format, WebView app):
+  - Package `kr.bsm.evenglass`, version 0.1.0, minSdk 24 / targetSdk 34.
+  - `MainActivity` requests camera permission and loads `assets/index.html`; `Chrome` grants WebView camera access.
+  - Japanese→Korean camera translation: Gemini vision if a key is set, otherwise Tesseract OCR + MyMemory. Includes G2 screen preview.
+  - Study helper: solves a photographed problem with Gemini (newly written; original `camera-study.html` was not available).
+  - Presentation prompter: `assets/prompter.html`.
+  - API keys are entered in the app's settings screen and stored only in on-device localStorage. No keys in source.
+- Fixed `MainActivity.onBackPressed` register count (`.registers 2` → `3`) so `p0` is not overwritten.
+- GitHub Actions workflow `.github/workflows/build-apk.yml` builds the APK on every push (apktool 2.10.0 + uber-apk-signer 1.3.0 debug signing), uploads the `EvenGlass-apk` artifact, and publishes `EvenGlass.apk` to GitHub Releases on `main`.
+- First Actions build succeeded (run 45317769726, artifact ~41 KB).
+- **Not yet tested on a real Galaxy device.**
+
+## How to install
+1. Open https://github.com/bsmkorea1216sj/EvenGlass/releases/latest on the phone.
+2. Download `EvenGlass.apk` and allow "install unknown apps" for the browser.
+3. Debug-signed build: Play Protect may warn; choose install anyway.
 
 ## Next steps
-1. Retrieve and inspect the full original `camera-study.html`.
-2. Separate any API key from source and document safe configuration.
-3. Create Android project and integrate the camera study mode.
-4. Add OCR and translation mode.
-5. Build and test an APK on a real Galaxy device.
-6. Investigate G2 SDK only after phone app works.
-
-This is a progress handoff, **not a completed application**.
+1. Install on Galaxy; check camera permission, translation, and study helper.
+2. If the original `camera-study.html` (made in Gemini/Codex/ChatGPT) is found, add it and replace the study helper with it.
+3. Investigate G2 SDK only after the phone app is stable.

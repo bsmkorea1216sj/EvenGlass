@@ -19,10 +19,12 @@ Build a Samsung Galaxy Android APK that retains the existing camera-based study/
 - Android project added under `app/` (apktool format, WebView app):
   - Package `kr.bsm.evenglass`, version 0.1.0, minSdk 24 / targetSdk 34.
   - `MainActivity` requests camera permission and loads `assets/index.html`; `Chrome` grants WebView camera access.
-  - Japanese→Korean camera translation: Gemini vision if a key is set, otherwise Tesseract OCR + MyMemory. Includes G2 screen preview.
-  - Study helper: solves a photographed problem with Gemini (newly written; original `camera-study.html` was not available).
+  - **0.2.0: live Japanese→Korean translation, no capture button.** The camera frame is OCR'd every 0.8–3 s (Tesseract.js `jpn`/`jpn_vert`, chosen in settings) and translated with MyMemory (no API key). Translation is only requested when the recognized text changes (bigram similarity ≤ 0.8), with a cache, to save the free daily quota. Pause, camera flip, photo picker, and G2 preview remain.
+  - Gemini removed (the `gemini-2.5-flash` model was retired and the user no longer wants Gemini here).
+  - Study helper removed at the user's request; it lives in a separate app.
   - Presentation prompter: `assets/prompter.html`.
-  - API keys are entered in the app's settings screen and stored only in on-device localStorage. No keys in source.
+  - 0.1.1 camera fix: reload WebView after CAMERA permission result; `getUserMedia` retries with looser constraints; photo picker via `onShowFileChooser`.
+  - PC test (2026-11-24, Chrome, canvas text): OCR + translation correct; ~2 s per changed frame, ~1.2 s per unchanged frame. Phone speed not measured.
 - Fixed `MainActivity.onBackPressed` register count (`.registers 2` → `3`) so `p0` is not overwritten.
 - GitHub Actions workflow `.github/workflows/build-apk.yml` builds the APK on every push (apktool 2.10.0 + uber-apk-signer 1.3.0 debug signing), uploads the `EvenGlass-apk` artifact, and publishes `EvenGlass.apk` to GitHub Releases on `main`.
 - First Actions build succeeded (run 45317769726, artifact ~41 KB).
@@ -34,6 +36,6 @@ Build a Samsung Galaxy Android APK that retains the existing camera-based study/
 3. Debug-signed build: Play Protect may warn; choose install anyway.
 
 ## Next steps
-1. Install on Galaxy; check camera permission, translation, and study helper.
-2. If the original `camera-study.html` (made in Gemini/Codex/ChatGPT) is found, add it and replace the study helper with it.
+1. Install 0.2.0 on Galaxy; check camera opens and live translation speed/accuracy.
+2. If MyMemory's free quota is too small, consider an on-device translator.
 3. Investigate G2 SDK only after the phone app is stable.

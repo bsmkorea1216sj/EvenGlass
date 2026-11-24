@@ -20,29 +20,40 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Download apktool and uber-apk-signer
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build release APK (unsigned)
         run: |
-          curl -fsSL -o apktool.jar https://github.com/iBotPeaches/Apktool/releases/download/v2.10.0/apktool_2.10.0.jar
-          curl -fsSL -o uber-apk-signer.jar https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar
-          ls -l *.jar
+          set -o pipefail
+          gradle :app:assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log
 
-      - name: Build unsigned APK
-        run: java -jar apktool.jar b app -o unsigned.apk
+      - name: Report build errors
+        if: failure()
+        run: |
+          msg=$(grep -E "^e: |error:|What went wrong|Could not|Caused by|^> " build.log | head -60 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')
+          echo "::error title=Gradle build failed::${msg}"
 
+      # Same debug key as earlier builds, so updates install over the existing app.
       - name: Debug-sign APK
-        run: java -jar uber-apk-signer.jar -a unsigned.apk -o signed
+        run: |
+          curl -fsSL -o uber-apk-signer.jar https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar
+          java -jar uber-apk-signer.jar -a app/build/outputs/apk/release/app-release-unsigned.apk -o signed
 
       - name: Rename APK
         id: ver
         run: |
           cp signed/*.apk EvenGlass.apk
-          echo "name=$(awk '/versionName:/{print $2}' app/apktool.yml)" >> "$GITHUB_OUTPUT"
+          ls -l EvenGlass.apk
+          echo "name=$(sed -n 's/.*versionName *= *"\(.*\)".*/\1/p' app/build.gradle.kts)" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: EvenGlass-apk
-          path: signed/*.apk
+          path: EvenGlass.apk
           if-no-files-found: error
 
       - name: Publish GitHub Release

@@ -93,7 +93,7 @@ A Samsung Galaxy app that translates Japanese seen through the camera into Korea
 - Allow "install unknown apps"; Play Protect may warn about a debug-signed app — choose install anyway.
 
 ## Status
-- 자동번역 0.6.0 build: result recorded after push.
+- 자동번역 0.6.0: first build failed ("/*" inside a KDoc opened a nested comment), fixed build succeeded (Actions run 45718735570, release v0.5.1-build18). Not yet tested on a device.
 - 자동번역 0.5.2 build succeeded (Actions run 45715866877, release v0.5.1-build16). Not yet tested on a device.
 - 자동번역 0.5.1 build succeeded (Actions run 45714889562, release v0.5.1-build15). Not yet tested on a device.
 - 자동번역 0.5.0: first build failed (stray brace from an edit; CI annotation now lists Kotlin `e:` lines first), fixed build succeeded (Actions run 45713595160, release v0.5.1-build14). Not yet tested on a device.

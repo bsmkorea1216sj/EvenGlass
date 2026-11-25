@@ -80,7 +80,7 @@ A Samsung Galaxy app that translates Japanese seen through the camera into Korea
 - Allow "install unknown apps"; Play Protect may warn about a debug-signed app — choose install anyway.
 
 ## Status
-- 자동번역 0.4.0 build: result recorded after push.
+- 자동번역 0.4.0 build succeeded on the first try (Actions run 45667713990, release v0.5.1-build12; APK ≈ 45 MB with the Anthropic SDK). Not yet tested on a device.
 - 자동번역 0.3.0 build succeeded (Actions run 45665096057, release v0.5.1-build11). Not yet tested on a device.
 - 자동번역 0.2.0 build succeeded (Actions run 45663809086). Not yet tested on a device.
 - Two-app build succeeded (Actions run 45662252734 → release v0.5.1-build9: EvenGlass.apk ≈ 53 MB, EvenGlass-AutoTranslate.apk ≈ 34 MB). Not yet tested on a device.

@@ -107,7 +107,6 @@ class MainActivity : ComponentActivity() {
     private val pickBundle = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) importBundle(uri)
     }
-    }
 
     private val handler = Handler(Looper.getMainLooper())
     private var recognizer: SpeechRecognizer? = null

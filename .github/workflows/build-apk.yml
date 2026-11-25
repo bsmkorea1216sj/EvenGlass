@@ -33,7 +33,8 @@ jobs:
       - name: Report build errors
         if: failure()
         run: |
-          msg=$(grep -E "^e: |error:|What went wrong|Could not|Caused by|^> " build.log | head -60 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')
+          # Compiler errors first (task lines would otherwise fill the annotation), then Gradle's summary.
+          msg=$( { grep -E "^e: " build.log | head -40; grep -E -A3 "What went wrong" build.log | head -12; } | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')
           echo "::error title=Gradle build failed::${msg}"
 
       # Same debug key as earlier builds, so updates install over the existing app.

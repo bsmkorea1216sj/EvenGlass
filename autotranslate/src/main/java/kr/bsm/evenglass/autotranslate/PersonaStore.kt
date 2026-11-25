@@ -46,11 +46,11 @@ internal class PersonaStore(
 
     /** Blocking; call off the main thread. */
     fun load() {
-        val userDir = userDir(context)
-        val userStyle = File(userDir, "style.md")
+        val dir = userDir(context)
+        val userStyle = File(dir, "style.md")
         style = (if (userStyle.isFile) userStyle.readText()
             else context.assets.open("persona/style.md").bufferedReader().use { it.readText() }).trim()
-        val userPairs = File(userDir, userFile)
+        val userPairs = File(dir, userFile)
         val raw = if (userPairs.isFile) userPairs.readText()
             else try { context.assets.open(pairsAsset).bufferedReader().use { it.readText() } } catch (_: java.io.IOException) { "" }
         val hash = MessageDigest.getInstance("SHA-256").digest(raw.toByteArray())

@@ -57,7 +57,7 @@ A Samsung Galaxy app that translates Japanese seen through the camera into Korea
 - Allow "install unknown apps"; Play Protect may warn about a debug-signed app — choose install anyway.
 
 ## Status
-- Two-app build (EvenGlass 0.5.1 + EvenGlass 자동번역 0.1.0): result recorded after push.
+- Two-app build succeeded (Actions run 45662252734 → release v0.5.1-build9: EvenGlass.apk ≈ 53 MB, EvenGlass-AutoTranslate.apk ≈ 34 MB). Not yet tested on a device.
 - 0.5.0 build succeeded on the first try (Actions run 45660726560 → release v0.5.0-build7, EvenGlass.apk ≈ 55 MB). Not yet tested on a real Galaxy device (speech recognition, latency, suggestion quality).
 - 0.4.0 source implementation; build and device verification pending.
 - 0.3.0 build succeeded (v0.3.0-build5). **Not yet tested on a real Galaxy device** (camera, OCR accuracy, translation quality, speed).

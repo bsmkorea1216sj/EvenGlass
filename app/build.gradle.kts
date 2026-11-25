@@ -11,8 +11,8 @@ android {
         applicationId = "kr.bsm.evenglass"
         minSdk = 24
         targetSdk = 34
-        versionCode = 5
-        versionName = "0.4.0"
+        versionCode = 6
+        versionName = "0.5.0"
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
@@ -56,6 +56,8 @@ dependencies {
     implementation("com.google.mlkit:text-recognition-japanese:16.0.1")
     // On-device ja->ko translation (model downloaded once, ~30MB)
     implementation("com.google.mlkit:translate:17.0.3")
+    // On-device language identification for the reply assistant
+    implementation("com.google.mlkit:language-id:17.0.6")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")

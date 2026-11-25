@@ -14,9 +14,9 @@ import java.security.MessageDigest
  * Reads the owner's personal data from a folder on the phone (by default Download/개인정보), chosen once
  * with the system folder picker; the read permission is persisted, so app updates keep working without
  * picking again. Supported files:
- *  - *.json   persona bundle {"style","interview_context","facts":[{topic,text}],"interview_pairs":[...],"conversation_pairs":[...]}
+ *  - *.json   persona bundle with keys style,"interview_context","facts":[{topic,text}],"interview_pairs":[...],"conversation_pairs":[...]}
  *  - *.jsonl  pairs (name containing "interview"/"면접" → interview, "fact"/"카드" → fact cards, else conversation)
- *  - *.txt/*.md  notes: name containing "style"/"말투" → tone profile, otherwise one fact card per paragraph
+ *  - .txt and .md notes: name containing "style"/"말투" → tone profile, otherwise one fact card per paragraph
  *  - *.pdf    papers, CVs: Gemini turns them into fact cards once; results are cached by file name/size/date
  * Everything is merged and written to app-private storage (files/persona_user/) for PersonaStore.
  */

@@ -25,10 +25,10 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build release APK (unsigned)
+      - name: Build release APKs (unsigned)
         run: |
           set -o pipefail
-          gradle :app:assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log
+          gradle :app:assembleRelease :autotranslate:assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log
 
       - name: Report build errors
         if: failure()
@@ -40,20 +40,28 @@ jobs:
       - name: Debug-sign APK
         run: |
           curl -fsSL -o uber-apk-signer.jar https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar
-          java -jar uber-apk-signer.jar -a app/build/outputs/apk/release/app-release-unsigned.apk -o signed
+          mkdir unsigned
+          cp app/build/outputs/apk/release/app-release-unsigned.apk unsigned/EvenGlass.apk
+          cp autotranslate/build/outputs/apk/release/autotranslate-release-unsigned.apk unsigned/EvenGlass-AutoTranslate.apk
+          java -jar uber-apk-signer.jar -a unsigned -o signed
+          ls -l signed
 
-      - name: Rename APK
+      - name: Rename APKs
         id: ver
         run: |
-          cp signed/*.apk EvenGlass.apk
-          ls -l EvenGlass.apk
+          cp signed/EvenGlass-aligned*.apk EvenGlass.apk
+          cp signed/EvenGlass-AutoTranslate-aligned*.apk EvenGlass-AutoTranslate.apk
+          ls -l EvenGlass.apk EvenGlass-AutoTranslate.apk
           echo "name=$(sed -n 's/.*versionName *= *"\(.*\)".*/\1/p' app/build.gradle.kts)" >> "$GITHUB_OUTPUT"
+          echo "auto=$(sed -n 's/.*versionName *= *"\(.*\)".*/\1/p' autotranslate/build.gradle.kts)" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: EvenGlass-apk
-          path: EvenGlass.apk
+          path: |
+            EvenGlass.apk
+            EvenGlass-AutoTranslate.apk
           if-no-files-found: error
 
       - name: Publish GitHub Release
@@ -63,7 +71,11 @@ jobs:
           tag_name: v${{ steps.ver.outputs.name }}-build${{ github.run_number }}
           name: EvenGlass ${{ steps.ver.outputs.name }} (build ${{ github.run_number }})
           body: |
-            Debug-signed APK built from ${{ github.sha }}.
-            Install on Galaxy: download EvenGlass.apk, then allow "install unknown apps".
-          files: EvenGlass.apk
+            Debug-signed APKs built from ${{ github.sha }}.
+            - EvenGlass.apk — camera translator ${{ steps.ver.outputs.name }}
+            - EvenGlass-AutoTranslate.apk — EvenGlass 자동번역 (conversation translation + reply suggestions) ${{ steps.ver.outputs.auto }}
+            Install on Galaxy: download the APK, then allow "install unknown apps".
+          files: |
+            EvenGlass.apk
+            EvenGlass-AutoTranslate.apk
           make_latest: true

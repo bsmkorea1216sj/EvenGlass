@@ -130,9 +130,6 @@ class MainActivity : ComponentActivity() {
         findViewById<Button>(R.id.prompter).setOnClickListener {
             startActivity(Intent(this, PrompterActivity::class.java))
         }
-        findViewById<Button>(R.id.replyAssist).setOnClickListener {
-            if (!photoBusy) startActivity(Intent(this, ReplyAssistActivity::class.java))
-        }
         lifecycleScope.launch {
             try { prepareModel() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
         }
@@ -170,7 +167,7 @@ class MainActivity : ComponentActivity() {
             setSingleLine(true)
             setText(current.model)
         }
-        val testResult = TextView(this).apply { text = "실시간 OCR 텍스트, 정밀 촬영 사진, 대화 도우미의 인식 문장은 Gemini에 전송됩니다." }
+        val testResult = TextView(this).apply { text = "실시간 OCR 텍스트와 정밀 촬영 사진은 Gemini에 전송됩니다." }
         fields.addView(key)
         fields.addView(model)
         fields.addView(testResult)

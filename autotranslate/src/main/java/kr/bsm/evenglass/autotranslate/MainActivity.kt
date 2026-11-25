@@ -1,4 +1,4 @@
-package kr.bsm.evenglass
+package kr.bsm.evenglass.autotranslate
 
 import android.Manifest
 import android.app.AlertDialog
@@ -6,6 +6,10 @@ import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.text.InputType
+import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
@@ -44,11 +48,11 @@ import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Phone-only prototype of the G2 reply assistant:
+ * EvenGlass 자동번역 — phone-only prototype of the G2 reply assistant (phone microphone):
  * speech (or typed text) → ML Kit language ID → on-device retrieval of similar past replies
  * → Gemini JSON generation of two short replies in SJK's style → G2-style preview.
  */
-class ReplyAssistActivity : ComponentActivity() {
+class MainActivity : ComponentActivity() {
     private lateinit var status: TextView
     private lateinit var other: TextView
     private lateinit var langView: TextView
@@ -89,7 +93,7 @@ class ReplyAssistActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_reply_assist)
+        setContentView(R.layout.activity_main)
         status = findViewById(R.id.status)
         other = findViewById(R.id.other)
         langView = findViewById(R.id.lang)
@@ -110,7 +114,7 @@ class ReplyAssistActivity : ComponentActivity() {
 
         lifecycleScope.launch {
             if (!storeReady.await()) setStatus("개인 대화 데이터(persona)를 불러오지 못했습니다. 예시 없이 생성합니다.")
-            else if (settings().key.isBlank()) setStatus("Gemini API 키가 없습니다. 메인 화면 ⚙ 설정에서 입력하세요.")
+            else if (settings().key.isBlank()) setStatus("Gemini API 키가 없습니다. ⚙ 설정에서 입력하세요.")
         }
         // Warm up the on-device translator for the selected language (used for retrieval + quick translation).
         lifecycleScope.launch {
@@ -162,7 +166,7 @@ class ReplyAssistActivity : ComponentActivity() {
         listenBtn.text = "⏹ 듣기 정지"
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         createRecognizer()
-        setStatus("듣는 중 · " + currentLocale())
+        setStatus("휴대폰 마이크로 듣는 중 · " + currentLocale())
         startSession()
     }
 
@@ -357,7 +361,7 @@ class ReplyAssistActivity : ComponentActivity() {
             if (conf.key.isBlank()) {
                 answers.text = "(Gemini API 키가 필요합니다)"
                 history.setError("API 키 없음")
-                setStatus("Gemini API 키가 없습니다. 메인 화면 ⚙ 설정에서 입력하세요. · 유사 예시 " + hits.size + "개")
+                setStatus("Gemini API 키가 없습니다. ⚙ 설정에서 입력하세요. · 유사 예시 " + hits.size + "개")
                 return@launch
             }
             val start = SystemClock.elapsedRealtime()
@@ -438,23 +442,62 @@ class ReplyAssistActivity : ComponentActivity() {
     // ---------------- Settings / export ----------------
 
     private fun showSettings() {
-        val idx = LOCALES.indexOf(asrLocale()).coerceAtLeast(0)
-        val labels: Array<CharSequence> = LOCALES.map<String, CharSequence> { it + " · " + ReplyEngine.langName(it) }.toTypedArray()
-        AlertDialog.Builder(this)
-            .setTitle("인식 언어 (기록 " + history.count() + "건)")
-            .setSingleChoiceItems(labels, idx) { d, which ->
-                prefs.edit().putString("asr_locale", LOCALES[which]).apply()
-                updateAsrLabel()
-                if (listening && overrideLocale == null) {
-                    try { recognizer?.cancel() } catch (_: Exception) { }
-                    scheduleRestart(150L)
-                }
-                setStatus("인식 언어: " + LOCALES[which] + " · Gemini 키·모델은 메인 화면 ⚙ 설정을 사용합니다.")
-                d.dismiss()
+        val current = settings()
+        val pad = (20 * resources.displayMetrics.density).toInt()
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(pad, pad / 2, pad, 0) }
+        val key = EditText(this).apply {
+            hint = "Gemini API 키"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setSingleLine(true)
+            setText(current.key)
+        }
+        val model = EditText(this).apply { hint = "모델명"; setSingleLine(true); setText(current.model) }
+        val langLabel = TextView(this).apply { text = "인식 언어 (휴대폰 마이크)"; setPadding(0, pad / 2, 0, 0) }
+        val group = RadioGroup(this)
+        LOCALES.forEachIndexed { i, loc ->
+            group.addView(RadioButton(this).apply {
+                id = View.generateViewId()
+                tag = loc
+                text = loc + " · " + ReplyEngine.langName(loc) + if (i == 0) " (기본)" else ""
+                isChecked = loc == asrLocale()
+            })
+        }
+        val note = TextView(this).apply { text = "상대 발화 문장은 Gemini에 전송됩니다. 기록 " + history.count() + "건" }
+        val export = Button(this).apply { text = "기록 내보내기 (history.jsonl)" }
+        listOf(key, model, langLabel, group, note, export).forEach { box.addView(it) }
+        val dialog = AlertDialog.Builder(this).setTitle("설정")
+            .setView(android.widget.ScrollView(this).apply { addView(box) })
+            .setNegativeButton("취소", null).setNeutralButton("연결 테스트", null).setPositiveButton("저장", null).create()
+        dialog.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        dialog.show()
+        fun entered() = GeminiSettings(key.text.toString().trim(), model.text.toString().trim().ifEmpty { GeminiClient.DEFAULT_MODEL })
+        export.setOnClickListener { dialog.dismiss(); exportHistory() }
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val v = entered()
+            geminiPrefs.edit().putString("api_key", v.key).putString("model", v.model).apply()
+            val loc = group.findViewById<RadioButton>(group.checkedRadioButtonId)?.tag as? String ?: asrLocale()
+            val changed = loc != asrLocale()
+            prefs.edit().putString("asr_locale", loc).apply()
+            updateAsrLabel()
+            if (changed && listening && overrideLocale == null) {
+                try { recognizer?.cancel() } catch (_: Exception) { }
+                scheduleRestart(150L)
             }
-            .setNeutralButton("기록 내보내기") { _, _ -> exportHistory() }
-            .setPositiveButton("닫기", null)
-            .show()
+            setStatus((if (v.key.isBlank()) "API 키 없음 · " else "설정 저장 · ") + "인식 언어 " + loc)
+            dialog.dismiss()
+        }
+        val test = dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
+        test.setOnClickListener {
+            test.isEnabled = false
+            note.text = "연결 테스트 중…"
+            lifecycleScope.launch {
+                try { GeminiClient.test(entered()); note.text = "연결 성공" }
+                catch (e: CancellationException) { throw e }
+                catch (e: GeminiException) { note.text = "연결 실패: " + e.message }
+                catch (_: Exception) { note.text = "연결 실패: 설정을 확인하세요." }
+                finally { test.isEnabled = true }
+            }
+        }
     }
 
     private fun exportHistory() {

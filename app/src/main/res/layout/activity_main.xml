@@ -110,14 +110,6 @@
             android:text="정밀 촬영"
             android:textColor="@color/txt" />
         <Button
-            android:id="@+id/replyAssist"
-            style="?android:attr/buttonBarButtonStyle"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="2"
-            android:text="대화 도우미"
-            android:textColor="@color/green" />
-        <Button
             android:id="@+id/settings"
             style="?android:attr/buttonBarButtonStyle"
             android:layout_width="0dp"

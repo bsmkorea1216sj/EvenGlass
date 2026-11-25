@@ -13,4 +13,4 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "EvenGlass"
-include(":app")
+include(":app", ":autotranslate")

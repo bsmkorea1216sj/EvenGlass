@@ -58,14 +58,16 @@
 
 ---
 
-## 부록: 0.5.0 휴대폰 단독 프로토타입 구현 현황
+## 부록: 휴대폰 단독 프로토타입 구현 현황
+
+별도 앱 **EvenGlass 자동번역** (`autotranslate/` 모듈, applicationId `kr.bsm.evenglass.autotranslate`, 0.1.0). 처음에는 카메라 번역 앱 EvenGlass 0.5.0 안의 [대화 도우미] 화면이었으나, 카메라 앱과 용도가 달라 분리했다. 인식 언어 기본값은 영어(en-US), 입력은 휴대폰 마이크. 아래 파일은 `autotranslate/src/main/java/kr/bsm/evenglass/autotranslate/` 기준.
 | 설계 항목 | 0.5.0 구현 | 파일 |
 |---|---|---|
-| 입력부 | G2 대신 Android `SpeechRecognizer` 연속 인식(부분 결과), 부분 결과가 1.2초 멈추면 한 발화로 확정. 인식 언어 en-US/ja-JP/zh-CN/ko-KR 선택. 테스트용 텍스트 입력창 | `ReplyAssistActivity.kt` |
-| 언어 감지 | ML Kit Language ID (불확실하면 문자 체계 → 인식 언어 순으로 대체) | `ReplyAssistActivity.kt` |
+| 입력부 | G2 대신 Android `SpeechRecognizer` 연속 인식(부분 결과), 부분 결과가 1.2초 멈추면 한 발화로 확정. 인식 언어 en-US(기본)/ja-JP/zh-CN/ko-KR 선택. 테스트용 텍스트 입력창 | `MainActivity.kt` |
+| 언어 감지 | ML Kit Language ID (불확실하면 문자 체계 → 인식 언어 순으로 대체) | `MainActivity.kt` |
 | 데이터 | `assets/persona/pairs.jsonl`(샘플 30개) → SQLite `persona.db`로 적재, `assets/persona/style.md` 말투 프로필 | `PersonaStore.kt` |
 | 검색부 | **임베딩 대신 문자 2·3-gram TF-IDF 코사인 상위 5개**. 상대가 외국어면 ML Kit 온디바이스 번역(→한국어) 결과로도 검색해 언어가 달라도 맞춤. `emb` 컬럼은 향후 벡터용으로 비워 둠 | `PersonaStore.kt` |
-| 생성부 | 기존 설정의 Gemini 키·모델로 REST `generateContent`, `responseMimeType: application/json`. flash 모델은 지연을 줄이려 thinking 끔(거부되면 자동 재시도) | `ReplyEngine.kt`, `GeminiClient.kt` |
+| 생성부 | 앱 ⚙ 설정의 Gemini 키·모델로 REST `generateContent`, `responseMimeType: application/json`. flash 모델은 지연을 줄이려 thinking 끔(거부되면 자동 재시도) | `ReplyEngine.kt`, `GeminiClient.kt` |
 | 출력부 | G2 SDK 대신 휴대폰의 G2 미리보기 패널(검은 배경·초록 글씨), 우상단에 생성 지연(ms) | `activity_reply_assist.xml` |
 | 리사이클링 | `files/logs/history.jsonl`에 상대 원문·제시안 2개·내 실제 답·일치 여부 기록, 설정에서 공유 인텐트로 내보내기 | `ReplyEngine.kt`(HistoryLog) |
 | 미구현 | 스트리밍 표시, 부분 결과로 선검색, 답 캐시, Gemini Nano 오프라인 대체, G2 SDK 연동 | — |

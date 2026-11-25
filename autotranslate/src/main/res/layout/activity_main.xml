@@ -16,7 +16,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="대화 도우미"
+            android:text="EvenGlass 자동번역"
             android:textColor="@color/txt"
             android:textSize="18sp"
             android:textStyle="bold" />

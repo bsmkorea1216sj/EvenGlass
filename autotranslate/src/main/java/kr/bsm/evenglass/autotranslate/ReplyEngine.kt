@@ -1,4 +1,4 @@
-package kr.bsm.evenglass
+package kr.bsm.evenglass.autotranslate
 
 import android.content.Context
 import org.json.JSONArray

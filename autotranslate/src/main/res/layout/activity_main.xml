@@ -152,25 +152,45 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="🎙 듣기 시작"
-            android:textColor="@color/txt" />
+            android:textColor="@color/txt"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/korean"
+            style="?android:attr/buttonBarButtonStyle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1.2"
+            android:text="🇰🇷 한국어로 말하기"
+            android:textColor="@color/txt"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="0dp"
+        android:orientation="horizontal">
 
         <Button
             android:id="@+id/myReply"
             style="?android:attr/buttonBarButtonStyle"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
+            android:layout_weight="1.2"
             android:text="🙋 다음은 내 말"
-            android:textColor="@color/txt" />
+            android:textColor="@color/txt"
+            android:textSize="14sp" />
 
         <Button
             android:id="@+id/flip"
             style="?android:attr/buttonBarButtonStyle"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_weight="0.8"
+            android:layout_weight="1"
             android:text="↺ 바꾸기"
-            android:textColor="@color/txt" />
+            android:textColor="@color/txt"
+            android:textSize="14sp" />
     </LinearLayout>
 
     <LinearLayout
@@ -184,7 +204,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:hint="테스트: 상대가 한 말을 입력"
+            android:hint="상대 말 입력 · 한국어로 쓰면 내 말 통역"
             android:imeOptions="actionSend"
             android:inputType="text"
             android:textColor="@color/txt"

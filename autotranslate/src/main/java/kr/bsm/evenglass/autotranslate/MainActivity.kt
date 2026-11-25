@@ -81,7 +81,14 @@ class MainActivity : ComponentActivity() {
     private var listening = false
     private var partial = ""
     private var awaitingMyReply = false
-    private var overrideLocale: String? = null
+    /** [🇰🇷 한국어로 말하기]: the next utterance is my Korean, to be interpreted into the other person's language. */
+    private var koreanMode = false
+    private data class Interp(val ko: String, val text: String, val pron: String, val lang: String)
+    private var currentInterp: Interp? = null
+    private var interpJob: Job? = null
+    /** Suggestions part of the G2 panel (or a placeholder); the interpretation block is drawn above it. */
+    private var answersBody: CharSequence = ""
+    private lateinit var koreanBtn: Button
     private var lastOtherLang = "en"
     private var replyJob: Job? = null
 
@@ -117,6 +124,9 @@ class MainActivity : ComponentActivity() {
         myReplyBtn = findViewById(R.id.myReply)
         flipBtn = findViewById(R.id.flip)
         flipBtn.setOnClickListener { flipLast() }
+        koreanBtn = findViewById(R.id.korean)
+        koreanBtn.setOnClickListener { toggleKorean() }
+        answersBody = answers.text
         input = findViewById(R.id.input)
 
         listenBtn.setOnClickListener { if (listening) stopListening() else startListening() }
@@ -132,8 +142,10 @@ class MainActivity : ComponentActivity() {
         }
         // Warm up the on-device translator for the selected language (used for retrieval + quick translation).
         lifecycleScope.launch {
-            try { translator(asrLocale().substringBefore('-'))?.downloadModelIfNeeded(DownloadConditions.Builder().build())?.await() }
-            catch (e: CancellationException) { throw e } catch (_: Exception) { }
+            try {
+                translator(targetLang())?.downloadModelIfNeeded(DownloadConditions.Builder().build())?.await()
+                translatorFromKo(targetLang())?.downloadModelIfNeeded(DownloadConditions.Builder().build())?.await()
+            } catch (e: CancellationException) { throw e } catch (_: Exception) { }
         }
     }
 
@@ -158,11 +170,29 @@ class MainActivity : ComponentActivity() {
     )
 
     private fun asrLocale(): String = prefs.getString("asr_locale", "en-US") ?: "en-US"
-    private fun currentLocale(): String = overrideLocale ?: asrLocale()
+    /** The other person's language = interpretation target (from the 상대 언어 setting). */
+    private fun targetLang(): String = asrLocale().substringBefore('-')
+    private fun currentLocale(): String = when {
+        koreanMode -> "ko-KR"
+        awaitingMyReply -> localeFor(lastOtherLang)
+        else -> asrLocale()
+    }
 
     private fun updateAsrLabel() {
         val loc = currentLocale()
-        asrLang.text = "인식: " + loc + if (overrideLocale != null) " (내 답)" else ""
+        asrLang.text = "인식: " + ReplyEngine.langName(loc) + when {
+            koreanMode -> " (내 한국어)"
+            awaitingMyReply -> " (내 말)"
+            else -> ""
+        }
+    }
+
+    /** Restart the running recognizer so a new recognition language takes effect. */
+    private fun restartRecognizerSoon() {
+        if (!listening) return
+        handler.removeCallbacks(silence)
+        try { recognizer?.cancel() } catch (_: Exception) { }
+        scheduleRestart(150L)
     }
 
     // ---------------- Speech recognition ----------------
@@ -253,7 +283,7 @@ class MainActivity : ComponentActivity() {
             val text = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim()
             if (text.isNullOrEmpty() || text == partial) return
             partial = text
-            setStatus((if (awaitingMyReply) "🙋 내 말 듣는 중: " else "🎙 ") + text)
+            setStatus((if (koreanMode) "🇰🇷 " else if (awaitingMyReply) "🙋 내 말 듣는 중: " else "🎙 ") + text)
             handler.removeCallbacks(silence)
             handler.postDelayed(silence, SILENCE_MS)
         }
@@ -298,14 +328,18 @@ class MainActivity : ComponentActivity() {
     /**
      * Decides who spoke:
      * 1) [🙋 다음은 내 말] was pressed → me;
-     * 2) at least 70% of what was said appears in a suggestion on screen (I read all or part of it) → me;
+     * 0) [🇰🇷 한국어로 말하기] or Korean text → my Korean, interpreted into the other person's language;
+     * 2) at least 70% of what was said appears in a suggestion or interpretation on screen (I read it) → me;
      * 3) otherwise → the other person (translate + suggest).
      * A wrong guess can be fixed with [↺ 바꾸기].
      */
     private fun deliver(text: String) {
+        // My Korean (button, or Korean typed/heard while the other person's language isn't Korean) → interpret.
+        if (koreanMode || (HANGUL.containsMatchIn(text) && targetLang() != "ko" && !awaitingMyReply)) { interpret(text); return }
         if (awaitingMyReply) { recordMine(text, "manual"); return }
         val longEnough = PersonaStore.normalize(text).replace(" ", "").length >= MIN_AUTO_CHARS
-        if (longEnough && suggestions.any { PersonaStore.containment(text, it) >= MATCH_ME }) {
+        val mine = suggestions + listOfNotNull(currentInterp?.text?.takeIf { it.isNotBlank() })
+        if (longEnough && mine.any { PersonaStore.containment(text, it) >= MATCH_ME }) {
             recordMine(text, "auto-match"); return
         }
         handleUtterance(text)
@@ -333,16 +367,103 @@ class MainActivity : ComponentActivity() {
 
     /** While on, the recognizer uses the other person's language and the next utterance is SJK's reply. */
     private fun setMyReplyMode(on: Boolean) {
+        if (on && koreanMode) setKoreanMode(false)
         awaitingMyReply = on
-        overrideLocale = if (on) localeFor(lastOtherLang) else null
         myReplyBtn.text = if (on) "🙋 내 말 대기 (취소)" else "🙋 다음은 내 말"
         myReplyBtn.setTextColor(if (on) ContextCompat.getColor(this, R.color.green) else ContextCompat.getColor(this, R.color.txt))
         updateAsrLabel()
-        if (listening) {
-            handler.removeCallbacks(silence)
-            try { recognizer?.cancel() } catch (_: Exception) { }
-            scheduleRestart(150L)
+        restartRecognizerSoon()
+    }
+
+    // ---------------- My Korean → other person's language ----------------
+
+    private fun toggleKorean() {
+        if (koreanMode) { setKoreanMode(false); setStatus("한국어 통역 취소"); return }
+        if (targetLang() == "ko") {
+            setStatus("상대 언어가 한국어로 설정되어 있습니다. ⚙ 설정에서 영어·일본어·중국어·러시아어 중 하나를 고르세요.")
+            return
         }
+        setKoreanMode(true)
+        if (!listening) startListening()
+        setStatus("🇰🇷 한국어로 말하세요 → " + ReplyEngine.langName(targetLang()) + " 문장과 한글 발음을 보여 줍니다")
+    }
+
+    private fun setKoreanMode(on: Boolean) {
+        if (on && awaitingMyReply) setMyReplyMode(false)
+        koreanMode = on
+        koreanBtn.text = if (on) "🇰🇷 한국어 듣는 중 (취소)" else "🇰🇷 한국어로 말하기"
+        koreanBtn.setTextColor(ContextCompat.getColor(this, if (on) R.color.green else R.color.txt))
+        updateAsrLabel()
+        restartRecognizerSoon()
+    }
+
+    /** Interprets my Korean into the other person's language with a Hangul pronunciation guide. */
+    private fun interpret(korean: String) {
+        if (koreanMode) setKoreanMode(false)
+        val target = targetLang()
+        interpJob?.cancel()
+        currentInterp = Interp(korean, "통역 중…", "", target)
+        renderPanel()
+        interpJob = lifecycleScope.launch {
+            val start = SystemClock.elapsedRealtime()
+            storeReady.await()
+            val conf = settings()
+            var result: Interp? = null
+            var note = ""
+            if (conf.key.isBlank()) note = "API 키 없음"
+            else try {
+                val o = GeminiClient.generateJson(conf, ReplyEngine.buildInterpretPrompt(store.style, korean, target), fast = true)
+                val (text, pron) = ReplyEngine.parseInterpret(o)
+                result = Interp(korean, text, pron, target)
+            } catch (e: CancellationException) { throw e }
+            catch (e: GeminiException) { note = e.message ?: "Gemini 오류" }
+            catch (_: Exception) { note = "Gemini 오류" }
+            if (result == null) {
+                val mt = withTimeoutOrNull(5000L) { translateFromKo(korean, target) }
+                if (!mt.isNullOrBlank()) { result = Interp(korean, mt, "", target); note += " · 기기 번역(발음 없음)" }
+            }
+            val ms = SystemClock.elapsedRealtime() - start
+            if (result == null) {
+                currentInterp = null
+                renderPanel()
+                setStatus("통역 실패: " + note.ifBlank { "번역할 수 없습니다" })
+                return@launch
+            }
+            currentInterp = result
+            renderPanel()
+            latency.text = ms.toString() + " ms"
+            history.addInterpretation(korean, result.text, result.pron, target)
+            setStatus("🇰🇷→" + ReplyEngine.langName(target) + " 통역 " + ms + "ms" + (if (note.isNotBlank()) " ·$note" else "") +
+                " · 이 문장을 소리 내어 말하면 내 말로 기록됩니다")
+        }
+    }
+
+    private fun setAnswersBody(body: CharSequence) {
+        answersBody = body
+        renderPanel()
+    }
+
+    /** G2 panel = [my interpretation: text / Hangul pronunciation / (Korean)] + suggestions. */
+    private fun renderPanel() {
+        val i = currentInterp ?: run { answers.text = answersBody; return }
+        val sb = SpannableStringBuilder()
+        val head = sb.length
+        sb.append("🗣 ").append(i.text)
+        sb.setSpan(RelativeSizeSpan(1.1f), head, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        fun sub(t: String, color: Int) {
+            if (t.isBlank()) return
+            val from = sb.length
+            sb.append("\n   ").append(t)
+            sb.setSpan(ForegroundColorSpan(color), from, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        sub(i.pron, Color.parseColor("#B8FFDA"))
+        sub("(" + i.ko + ")", Color.parseColor("#4FBF8A"))
+        if (answersBody.isNotBlank() && answersBody.toString() != PLACEHOLDER) {
+            val from = sb.length
+            sb.append("\n\n").append(answersBody)
+            sb.setSpan(RelativeSizeSpan(0.8f), from, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        answers.text = sb
     }
 
     /** Records an utterance as my own words: no translation request, no suggestions. */
@@ -370,7 +491,7 @@ class MainActivity : ComponentActivity() {
                 history.discardLast()
                 prevScreen?.let { restoreScreen(it) } ?: run {
                     other.text = ""; langView.text = "감지 언어: -"; translation.text = ""
-                    answers.text = "G2 미리보기 · 예상 답변이 여기에 표시됩니다."; latency.text = ""; suggestions = emptyList()
+                    setAnswersBody(PLACEHOLDER); latency.text = ""; suggestions = emptyList()
                 }
                 prevScreen = null
                 recordMine(l.text, "corrected")
@@ -386,24 +507,25 @@ class MainActivity : ComponentActivity() {
 
     private fun restoreScreen(sc: Screen) {
         other.text = sc.other; langView.text = sc.lang; translation.text = sc.translation
-        answers.text = sc.answers; latency.text = sc.latency; lastOtherLang = sc.otherLang; suggestions = sc.suggestions
+        setAnswersBody(sc.answers); latency.text = sc.latency; lastOtherLang = sc.otherLang; suggestions = sc.suggestions
     }
 
     private fun localeFor(lang: String) = when (lang) {
-        "ja" -> "ja-JP"; "zh" -> "zh-CN"; "ko" -> "ko-KR"; "en" -> "en-US"; else -> asrLocale()
+        "ja" -> "ja-JP"; "zh" -> "zh-CN"; "ko" -> "ko-KR"; "en" -> "en-US"; "ru" -> "ru-RU"; else -> asrLocale()
     }
 
     // ---------------- Detect → retrieve → generate ----------------
 
     private fun handleUtterance(text: String) {
         replyJob?.cancel()
-        prevScreen = Screen(other.text, langView.text, translation.text, answers.text, latency.text, lastOtherLang, suggestions)
+        prevScreen = Screen(other.text, langView.text, translation.text, answersBody, latency.text, lastOtherLang, suggestions)
+        currentInterp = null
         last = Last(Speaker.OTHER, text)
         suggestions = emptyList()
         history.begin(text, "", "")
         other.text = text
         translation.text = ""
-        answers.text = "답변 만드는 중…"
+        setAnswersBody("답변 만드는 중…")
         latency.text = ""
         replyJob = lifecycleScope.launch {
             val t0 = SystemClock.elapsedRealtime()
@@ -422,7 +544,7 @@ class MainActivity : ComponentActivity() {
 
             val conf = settings()
             if (conf.key.isBlank()) {
-                answers.text = "(Gemini API 키가 필요합니다)"
+                setAnswersBody("(Gemini API 키가 필요합니다)")
                 history.setError("API 키 없음")
                 setStatus("Gemini API 키가 없습니다. ⚙ 설정에서 입력하세요. · 유사 예시 " + hits.size + "개")
                 return@launch
@@ -442,11 +564,11 @@ class MainActivity : ComponentActivity() {
                 setStatus("완료 · 감지·번역 " + (s0 - t0) + "ms · 검색 " + searchMs + "ms(예시 " + hits.size + "개) · 생성 " + ms + "ms · 전체 " + (now - t0) + "ms")
             } catch (e: CancellationException) { throw e }
             catch (e: GeminiException) {
-                answers.text = "(답변을 만들지 못했습니다)"
+                setAnswersBody("(답변을 만들지 못했습니다)")
                 history.setError(e.message ?: "Gemini 오류")
                 setStatus("답변 생성 실패: " + (e.message ?: "Gemini 오류"))
             } catch (_: Exception) {
-                answers.text = "(답변을 만들지 못했습니다)"
+                setAnswersBody("(답변을 만들지 못했습니다)")
                 history.setError("알 수 없는 오류")
                 setStatus("답변 생성 중 알 수 없는 오류가 발생했습니다.")
             }
@@ -462,6 +584,7 @@ class MainActivity : ComponentActivity() {
             Regex("[\\uac00-\\ud7a3]").containsMatchIn(text) -> "ko"
             Regex("[\\u3040-\\u30ff]").containsMatchIn(text) -> "ja"
             Regex("[\\u4e00-\\u9fff]").containsMatchIn(text) -> "zh"
+            Regex("[\\u0400-\\u04ff]").containsMatchIn(text) -> "ru"
             Regex("[A-Za-z]").containsMatchIn(text) -> "en"
             else -> asrLocale().substringBefore('-')
         }
@@ -474,6 +597,21 @@ class MainActivity : ComponentActivity() {
             Translation.getClient(TranslatorOptions.Builder().setSourceLanguage(src).setTargetLanguage(TranslateLanguage.KOREAN).build())
         }
     }
+
+    private fun translatorFromKo(lang: String): Translator? {
+        val tgt = TranslateLanguage.fromLanguageTag(lang) ?: return null
+        if (tgt == TranslateLanguage.KOREAN) return null
+        return translators.getOrPut("ko>" + tgt) {
+            Translation.getClient(TranslatorOptions.Builder().setSourceLanguage(TranslateLanguage.KOREAN).setTargetLanguage(tgt).build())
+        }
+    }
+
+    private suspend fun translateFromKo(text: String, lang: String): String? = try {
+        translatorFromKo(lang)?.let { t ->
+            t.downloadModelIfNeeded(DownloadConditions.Builder().build()).await()
+            t.translate(text).await()
+        }
+    } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
 
     private suspend fun translateToKo(text: String, lang: String): String? = try {
         translator(lang)?.let { t ->
@@ -499,7 +637,7 @@ class MainActivity : ComponentActivity() {
             if (r.lang != "ko") line(a.koMeaning)
             if (r.lang != "en" && r.lang != "ko") line(a.koPron)
         }
-        answers.text = sb
+        setAnswersBody(sb)
         suggestions = r.answers.map { it.text }
     }
 
@@ -516,13 +654,13 @@ class MainActivity : ComponentActivity() {
             setText(current.key)
         }
         val model = EditText(this).apply { hint = "모델명"; setSingleLine(true); setText(current.model) }
-        val langLabel = TextView(this).apply { text = "인식 언어 (휴대폰 마이크)"; setPadding(0, pad / 2, 0, 0) }
+        val langLabel = TextView(this).apply { text = "상대 언어 (휴대폰 마이크 인식 · 내 한국어 통역 대상)"; setPadding(0, pad / 2, 0, 0) }
         val group = RadioGroup(this)
         LOCALES.forEachIndexed { i, loc ->
             group.addView(RadioButton(this).apply {
                 id = View.generateViewId()
                 tag = loc
-                text = loc + " · " + ReplyEngine.langName(loc) + if (i == 0) " (기본)" else ""
+                text = ReplyEngine.langName(loc) + " (" + loc + ")" + if (i == 0) " · 기본" else ""
                 isChecked = loc == asrLocale()
             })
         }
@@ -543,11 +681,14 @@ class MainActivity : ComponentActivity() {
             val changed = loc != asrLocale()
             prefs.edit().putString("asr_locale", loc).apply()
             updateAsrLabel()
-            if (changed && listening && overrideLocale == null) {
-                try { recognizer?.cancel() } catch (_: Exception) { }
-                scheduleRestart(150L)
+            if (changed && !koreanMode && !awaitingMyReply) restartRecognizerSoon()
+            if (changed) lifecycleScope.launch {
+                try {
+                    translator(targetLang())?.downloadModelIfNeeded(DownloadConditions.Builder().build())?.await()
+                    translatorFromKo(targetLang())?.downloadModelIfNeeded(DownloadConditions.Builder().build())?.await()
+                } catch (e: CancellationException) { throw e } catch (_: Exception) { }
             }
-            setStatus((if (v.key.isBlank()) "API 키 없음 · " else "설정 저장 · ") + "인식 언어 " + loc)
+            setStatus((if (v.key.isBlank()) "API 키 없음 · " else "설정 저장 · ") + "상대 언어 " + ReplyEngine.langName(loc))
             dialog.dismiss()
         }
         val test = dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
@@ -597,6 +738,8 @@ class MainActivity : ComponentActivity() {
         private const val MATCH_ME = 0.7
         /** Shorter utterances ("Yes", "OK") are never auto-assigned to me; use [↺ 바꾸기] if needed. */
         private const val MIN_AUTO_CHARS = 6
-        private val LOCALES = listOf("en-US", "ja-JP", "zh-CN", "ko-KR")
+        private val LOCALES = listOf("en-US", "ja-JP", "zh-CN", "ru-RU", "ko-KR")
+        private const val PLACEHOLDER = "G2 미리보기 · 예상 답변이 여기에 표시됩니다."
+        private val HANGUL = Regex("[\\uac00-\\ud7a3]")
     }
 }

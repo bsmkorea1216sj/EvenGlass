@@ -16,7 +16,13 @@ A Samsung Galaxy app that translates Japanese seen through the camera into Korea
 ## Camera app: EvenGlass 0.5.1 (`app/` module)
 - versionCode 7; versionName 0.5.1. Same as 0.4.0 functionally; the [대화 도우미] screen added in 0.5.0 was moved out to the separate app below. GeminiClient keeps the 0.5.0 refactor (shared `generateJson`).
 
-## Separate app: EvenGlass 자동번역 0.2.0 (`autotranslate/` module)
+## Separate app: EvenGlass 자동번역 0.3.0 (`autotranslate/` module)
+- **0.3.0 (versionCode 3): my quiet Korean → the other person's language with Hangul pronunciation.**
+  - **[🇰🇷 한국어로 말하기]**: the recognizer switches to ko-KR for one utterance (starts listening if needed); the sentence is interpreted by Gemini (JSON `{text, ko_pron}`, polite/concise per style.md) into the 상대 언어 and shown at the top of the G2 panel as: target-language text / Hangul pronunciation / (my Korean). Shown for every target language, English included. Suggestions for the other person stay below in smaller text. No key or Gemini failure → ML Kit ko→target on-device translation (no pronunciation).
+  - Korean typed in the input box (or heard while the 상대 언어 isn't Korean) is treated the same way.
+  - When I then say the interpreted sentence aloud, it's recognized as my words (same ≥70% containment rule) and logged as my_reply.
+  - Settings now say **상대 언어** (labels in Korean): 영어 (en-US, default) / 일본어 / 중국어 / **러시아어 (ru-RU, new)** / 한국어. It sets both the recognition language for the other person and the interpretation target. Language ID/script fallback and ML Kit translation cover Russian.
+  - history.jsonl: `interpretations: [{ts, ko, text, ko_pron, lang}]` on the newest record.
 - **0.2.0 (versionCode 2): tells my words apart from the other person's.** Only the other person's words get translation + suggestions; mine are logged as `my_reply` with no Gemini call. Decision per utterance:
   1. **[🙋 다음은 내 말]** pressed (manual, also switches the recognizer to the other person's language) → me.
   2. **Auto:** ≥ 70% of the utterance's character n-grams appear in a suggestion on screen (containment, i.e. I read all or part of ①/②) and the utterance has ≥ 6 characters → me. Tested on samples: reading a suggestion fully/partly → 0.77–1.0; the other person's follow-ups reusing some words → 0.21–0.46. Very short replies ("Yes") are never auto-assigned.
@@ -66,6 +72,7 @@ A Samsung Galaxy app that translates Japanese seen through the camera into Korea
 - Allow "install unknown apps"; Play Protect may warn about a debug-signed app — choose install anyway.
 
 ## Status
+- 자동번역 0.3.0 build: result recorded after push.
 - 자동번역 0.2.0 build succeeded (Actions run 45663809086). Not yet tested on a device.
 - Two-app build succeeded (Actions run 45662252734 → release v0.5.1-build9: EvenGlass.apk ≈ 53 MB, EvenGlass-AutoTranslate.apk ≈ 34 MB). Not yet tested on a device.
 - 0.5.0 build succeeded on the first try (Actions run 45660726560 → release v0.5.0-build7, EvenGlass.apk ≈ 55 MB). Not yet tested on a real Galaxy device (speech recognition, latency, suggestion quality).

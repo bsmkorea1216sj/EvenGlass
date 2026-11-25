@@ -16,7 +16,8 @@ A Samsung Galaxy app that translates Japanese seen through the camera into Korea
 ## Camera app: EvenGlass 0.5.1 (`app/` module)
 - versionCode 7; versionName 0.5.1. Same as 0.4.0 functionally; the [대화 도우미] screen added in 0.5.0 was moved out to the separate app below. GeminiClient keeps the 0.5.0 refactor (shared `generateJson`).
 
-## Separate app: EvenGlass 자동번역 0.5.0 (`autotranslate/` module)
+## Separate app: EvenGlass 자동번역 0.5.1 (`autotranslate/` module)
+- **0.5.1 (versionCode 6): fix "career/papers don't appear in answers".** Causes found: (1) in 면접 mode, a Korean question typed in the input box (or heard as Korean) was routed to "my Korean → interpretation" instead of answer generation — now Korean auto-interpretation applies only in 회화 mode (🇰🇷 button still works everywhere); (2) 회화 mode sent only 3 n-gram-matched cards — now all cards (≤80) are sent in both modes; (3) the prompt only forbade inventing facts — it now requires concrete card facts (institution, period, paper title, figures, course names) whenever the question concerns career/research/teaching/plans, especially in answer ②; (4) no visible sign of whether personal data was loaded — the status line now shows "👤 개인 데이터 사용 중 · 경력 카드 N개" (or a warning to import) on start, and after each answer "카드 N개 중 M개 근거".
 - **0.5.0 (versionCode 5): answers grounded in my own data (personal data import).**
   - ⚙ 설정 → **[개인 데이터 가져오기]** reads a `persona_bundle.json` chosen on the phone and stores it only in app-private storage (`files/persona_user/`): `style.md`, `facts.jsonl` (fact cards "주제 | 내용"), `interview_pairs.jsonl`, optional `pairs.jsonl` (conversation). Imported files replace the bundled samples; **[개인 데이터 삭제]** goes back to samples. The settings show how many cards/answers are loaded.
   - Bundle format: `{"version":1, "style":"...", "interview_context":"...", "facts":[{"topic","text"}], "interview_pairs":[{"q","a","lang"}], "conversation_pairs":[...]}`. `interview_context` fills the 면접 정보 field.
@@ -85,6 +86,7 @@ A Samsung Galaxy app that translates Japanese seen through the camera into Korea
 - Allow "install unknown apps"; Play Protect may warn about a debug-signed app — choose install anyway.
 
 ## Status
+- 자동번역 0.5.1 build: result recorded after push.
 - 자동번역 0.5.0: first build failed (stray brace from an edit; CI annotation now lists Kotlin `e:` lines first), fixed build succeeded (Actions run 45713595160, release v0.5.1-build14). Not yet tested on a device.
 - 자동번역 0.4.0 build succeeded on the first try (Actions run 45667713990, release v0.5.1-build12; APK ≈ 45 MB with the Anthropic SDK). Not yet tested on a device.
 - 자동번역 0.3.0 build succeeded (Actions run 45665096057, release v0.5.1-build11). Not yet tested on a device.

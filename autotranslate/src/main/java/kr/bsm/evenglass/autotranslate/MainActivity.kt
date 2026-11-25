@@ -185,7 +185,9 @@ class MainActivity : ComponentActivity() {
 
         lifecycleScope.launch {
             if (!storeReady.await()) setStatus("개인 대화 데이터(persona)를 불러오지 못했습니다. 예시 없이 생성합니다.")
+            else if (factStore.size == 0) setStatus("👤 개인 데이터가 없습니다. ⚙ 설정 → [개인 데이터 가져오기]에서 persona_bundle.json을 고르세요.")
             else if (settings().key.isBlank()) setStatus("Gemini API 키가 없습니다. ⚙ 설정에서 입력하세요.")
+            else setStatus("👤 개인 데이터 사용 중 · 경력 카드 " + factStore.size + "개")
         }
         // Warm up the on-device translator for the selected language (used for retrieval + quick translation).
         lifecycleScope.launch {
@@ -275,8 +277,8 @@ class MainActivity : ComponentActivity() {
      * character-n-gram ranking misses paraphrased questions); otherwise / 회화: the best matches.
      */
     private fun relevantFacts(queries: List<String>): List<Hit> =
-        if (mode.isInterview && factStore.size <= ALL_FACTS_LIMIT) factStore.all()
-        else factStore.search(queries, if (mode.isInterview) 12 else 3).filter { it.score > 0.03 }
+        if (factStore.size <= ALL_FACTS_LIMIT) factStore.all()
+        else factStore.search(queries, 12).filter { it.score > 0.02 }
 
     private fun interviewContext(): String {
         val c = contextInput.text.toString().trim()
@@ -485,7 +487,9 @@ class MainActivity : ComponentActivity() {
      */
     private fun deliver(text: String) {
         // My Korean (button, or Korean typed/heard while the other person's language isn't Korean) → interpret.
-        if (koreanMode || (HANGUL.containsMatchIn(text) && targetLang() != "ko" && !awaitingMyReply)) { interpret(text); return }
+        // 회화: Korean text/speech is my Korean to interpret. 면접: Korean is the question itself (Korean interview
+        // or practice), so it gets grounded answers; interpretation there only via the 🇰🇷 button.
+        if (koreanMode || (!mode.isInterview && HANGUL.containsMatchIn(text) && targetLang() != "ko" && !awaitingMyReply)) { interpret(text); return }
         if (awaitingMyReply) { recordMine(text, "manual"); return }
         val longEnough = PersonaStore.normalize(text).replace(" ", "").length >= MIN_AUTO_CHARS
         val mine = suggestions + listOfNotNull(currentInterp?.text?.takeIf { it.isNotBlank() })
@@ -720,7 +724,8 @@ class MainActivity : ComponentActivity() {
                 latency.text = ms.toString() + " ms"
                 lastOtherLang = result.lang
                 history.setSuggestions(result, ms, hits)
-                setStatus(who + " 완료 · 감지·번역 " + (s0 - t0) + "ms · 검색 " + searchMs + "ms(예시 " + hits.size + "개) · 생성 " + ms + "ms · 전체 " + (now - t0) + "ms")
+                val cardNote = if (facts.isEmpty()) " · ⚠ 경력 카드 없음(설정에서 가져오기)" else " · 카드 " + facts.size + "개 중 " + result.evidence.size + "개 근거"
+                setStatus(who + " 완료" + cardNote + " · 감지·번역 " + (s0 - t0) + "ms · 검색 " + searchMs + "ms(예시 " + hits.size + "개) · 생성 " + ms + "ms · 전체 " + (now - t0) + "ms")
             } catch (e: CancellationException) { throw e }
             catch (e: GeminiException) {
                 setAnswersBody("(답변을 만들지 못했습니다)")

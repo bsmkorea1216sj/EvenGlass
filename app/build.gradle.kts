@@ -11,8 +11,8 @@ android {
         applicationId = "kr.bsm.evenglass"
         minSdk = 24
         targetSdk = 34
-        versionCode = 4
-        versionName = "0.3.0"
+        versionCode = 5
+        versionName = "0.4.0"
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
@@ -48,6 +48,9 @@ dependencies {
     implementation("androidx.camera:camera-camera2:$camerax")
     implementation("androidx.camera:camera-lifecycle:$camerax")
     implementation("androidx.camera:camera-view:$camerax")
+
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
 
     // On-device Japanese OCR (model bundled in the APK)
     implementation("com.google.mlkit:text-recognition-japanese:16.0.1")

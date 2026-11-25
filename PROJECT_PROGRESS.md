@@ -1,9 +1,9 @@
-# EvenGlass — Live Japanese→Korean Camera Translation — Progress (2026-11-24)
+# EvenGlass — Live Japanese→Korean Camera Translation — Progress (2026-11-25)
 
 ## Goal
 A Samsung Galaxy app that translates Japanese seen through the camera into Korean in real time, plus a presentation prompter. Later, show the translation on Even Realities G2 glasses.
 
-## Current version: 0.3.0 (native Kotlin + Google ML Kit)
+## Previous version: 0.3.0 (native Kotlin + Google ML Kit)
 - Package `kr.bsm.evenglass`, versionCode 4, minSdk 24 / targetSdk 34, ABIs arm64-v8a + armeabi-v7a.
 - `MainActivity.kt`: CameraX preview + ImageAnalysis. Every 600 ms the latest frame goes to:
   - **ML Kit Japanese text recognition** (on-device, model bundled in the APK; handles vertical text).
@@ -12,6 +12,16 @@ A Samsung Galaxy app that translates Japanese seen through the camera into Korea
 - Buttons: pause/resume, camera flip, photo (translate a gallery image), G2 preview (green-on-black panel), prompter.
 - `PrompterActivity.kt`: the existing `assets/prompter.html` in a WebView; its "← 메인" button returns to the camera screen.
 - APK is ~53 MB because the OCR model and native libraries are bundled.
+
+## Current version: 0.4.0 (Gemini-assisted translation)
+- versionCode 5; versionName 0.4.0.
+- Settings dialog: password input, private SharedPreferences (backup disabled), editable model default gemini-flash-latest and connection test. No hard-coded key, URL query key or request logging.
+- CameraX + ML Kit Japanese OCR every 600 ms, central 80% width / 70% height by block center; merge wrapped lines by paragraph.
+- Gemini REST generateContent with x-goog-api-key, JSON original/korean, corrected original shown, 20-second total timeout. Live calls only for changed text, at least 1.5 seconds apart.
+- No key or API/network failure: fall back to ML Kit Japanese-to-Korean; Korean status shows offline mode. First offline use requires model download.
+- Precision capture and gallery: EXIF-corrected image, longest edge up to 2048px, JPEG quality 85, Gemini vision OCR + translation in reading order (including vertical Japanese). Pauses live analysis; offline photo fallback uses ML Kit.
+- Real-time OCR text and selected/captured photos are sent to Gemini when configured; API usage may incur charges. No key is provided in repository or build.
+- Build/device status: pending GitHub Actions and physical Galaxy testing for 0.4.0.
 
 ## History
 - 0.1.0–0.1.1: apktool/smali WebView app with web camera; fixed a register bug and camera-permission flow.
@@ -28,9 +38,10 @@ A Samsung Galaxy app that translates Japanese seen through the camera into Korea
 - Allow "install unknown apps"; Play Protect may warn about a debug-signed app — choose install anyway.
 
 ## Status
+- 0.4.0 source implementation; build and device verification pending.
 - 0.3.0 build succeeded (v0.3.0-build5). **Not yet tested on a real Galaxy device** (camera, OCR accuracy, translation quality, speed).
 
 ## Next steps
-1. Test 0.3.0 on Galaxy: first-run model download, live translation accuracy and speed.
+1. Test 0.4.0 on Galaxy: Gemini connection, live accuracy/latency, precision capture, gallery, and offline fallback.
 2. Optionally draw translations over the text on the camera image (Lens-style overlay).
 3. Investigate G2 SDK only after the phone app is stable.

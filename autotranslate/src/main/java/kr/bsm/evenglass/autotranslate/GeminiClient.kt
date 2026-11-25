@@ -18,6 +18,12 @@ internal class GeminiException(message: String) : IOException(message)
 
 internal object GeminiClient {
     const val DEFAULT_MODEL = "gemini-flash-latest"
+    /** Long-running calls (reading a whole PDF). */
+    private val longClient by lazy {
+        OkHttpClient.Builder().callTimeout(120, TimeUnit.SECONDS).connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(120, TimeUnit.SECONDS).writeTimeout(60, TimeUnit.SECONDS)
+            .followRedirects(false).followSslRedirects(false).build()
+    }
     private val client = OkHttpClient.Builder()
         .callTimeout(20, TimeUnit.SECONDS)
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -38,23 +44,25 @@ internal object GeminiClient {
      * For "flash" models, thinking is turned off first for latency; if the model rejects
      * that option (HTTP 400), the request is retried once without it.
      */
-    suspend fun generateJson(settings: GeminiSettings, prompt: String, jpeg: ByteArray? = null, fast: Boolean = false): JSONObject =
+    suspend fun generateJson(settings: GeminiSettings, prompt: String, jpeg: ByteArray? = null, fast: Boolean = false,
+                             mime: String = "image/jpeg", long: Boolean = false): JSONObject =
         withContext(Dispatchers.IO) {
             if (settings.key.isBlank()) throw GeminiException("Gemini API 키가 없습니다.")
             val model = settings.model.removePrefix("models/").trim()
             if (!model.matches(Regex("[A-Za-z0-9._-]+"))) throw GeminiException("모델명이 올바르지 않습니다.")
             val noThinking = fast && model.contains("flash", ignoreCase = true)
             try {
-                call(settings.key, model, prompt, jpeg, noThinking)
+                call(settings.key, model, prompt, jpeg, noThinking, mime, long)
             } catch (e: GeminiException) {
-                if (noThinking && e.message == MSG_400) call(settings.key, model, prompt, jpeg, false) else throw e
+                if (noThinking && e.message == MSG_400) call(settings.key, model, prompt, jpeg, false, mime, long) else throw e
             }
         }
 
-    private fun call(key: String, model: String, prompt: String, jpeg: ByteArray?, noThinking: Boolean): JSONObject {
+    private fun call(key: String, model: String, prompt: String, jpeg: ByteArray?, noThinking: Boolean,
+                     mime: String = "image/jpeg", long: Boolean = false): JSONObject {
         val parts = JSONArray().put(JSONObject().put("text", prompt))
         if (jpeg != null) parts.put(JSONObject().put("inlineData", JSONObject()
-            .put("mimeType", "image/jpeg").put("data", Base64.encodeToString(jpeg, Base64.NO_WRAP))))
+            .put("mimeType", mime).put("data", Base64.encodeToString(jpeg, Base64.NO_WRAP))))
         val config = JSONObject().put("responseMimeType", "application/json")
         if (noThinking) config.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
         val body = JSONObject()
@@ -66,7 +74,7 @@ internal object GeminiClient {
                 .header("x-goog-api-key", key)
                 .post(body.toString().toRequestBody("application/json".toMediaType()))
                 .build()
-            return client.newCall(req).execute().use { response ->
+            return (if (long) longClient else client).newCall(req).execute().use { response ->
                 if (!response.isSuccessful) {
                     val message = when (response.code) {
                         400 -> MSG_400
@@ -92,9 +100,9 @@ internal object GeminiClient {
         } catch (e: GeminiException) {
             throw e
         } catch (e: SocketTimeoutException) {
-            throw GeminiException("Gemini 응답 시간 초과(20초).")
+            throw GeminiException(if (long) "Gemini 응답 시간 초과(120초)." else "Gemini 응답 시간 초과(20초).")
         } catch (e: java.io.InterruptedIOException) {
-            throw GeminiException("Gemini 응답 시간 초과(20초).")
+            throw GeminiException(if (long) "Gemini 응답 시간 초과(120초)." else "Gemini 응답 시간 초과(20초).")
         } catch (e: IOException) {
             throw GeminiException("네트워크 연결을 확인하세요.")
         } catch (e: Exception) {

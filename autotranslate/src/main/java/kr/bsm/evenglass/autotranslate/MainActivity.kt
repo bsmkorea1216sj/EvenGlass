@@ -108,6 +108,59 @@ class MainActivity : ComponentActivity() {
         if (uri != null) importBundle(uri)
     }
 
+    /** One-time choice of the personal data folder (Download/개인정보); permission is kept across app updates. */
+    private val pickFolder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            try {
+                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                prefs.edit().putString(PersonalFolder.PREF_URI, uri.toString()).remove(PersonalFolder.PREF_SIGNATURE).apply()
+                syncFolder(force = true)
+            } catch (_: Exception) { setStatus("이 폴더는 읽기 권한을 받을 수 없습니다. Download 안의 '개인정보' 폴더를 고르세요.") }
+        }
+    }
+    private var folderJob: Job? = null
+
+    private fun folderUri(): android.net.Uri? {
+        val s = prefs.getString(PersonalFolder.PREF_URI, null) ?: return null
+        val uri = android.net.Uri.parse(s)
+        return if (contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }) uri else null
+    }
+
+    private fun chooseFolder() {
+        try { pickFolder.launch(PersonalFolder.INITIAL_URI) }
+        catch (_: Exception) { setStatus("폴더 선택 화면을 열 수 없습니다.") }
+    }
+
+    /** Re-reads the personal folder when its files changed (or always with [force]). */
+    private fun syncFolder(force: Boolean) {
+        val uri = folderUri() ?: return
+        if (folderJob?.isActive == true) return
+        folderJob = lifecycleScope.launch {
+            try {
+                val entries = withContext(Dispatchers.IO) { PersonalFolder.list(this@MainActivity, uri) }
+                val sig = PersonalFolder.signature(entries)
+                val hasData = File(PersonaStore.userDir(this@MainActivity), "facts.jsonl").isFile
+                if (!force && hasData && sig == prefs.getString(PersonalFolder.PREF_SIGNATURE, null)) return@launch
+                if (entries.isEmpty()) { setStatus("👤 개인정보 폴더가 비어 있습니다. persona_bundle.json이나 논문 PDF를 넣으세요."); return@launch }
+                setStatus("👤 개인정보 폴더 읽는 중… (파일 " + entries.size + "개)")
+                val r = PersonalFolder.scan(this@MainActivity, uri, settings()) { msg -> runOnUiThread { setStatus("👤 " + msg) } }
+                prefs.edit().putString(PersonalFolder.PREF_SIGNATURE, sig)
+                    .putString("persona_imported_at", java.text.SimpleDateFormat("M/d HH:mm", java.util.Locale.KOREA).format(java.util.Date()))
+                    .apply()
+                if (r.context.isNotEmpty() && contextInput.text.isBlank()) {
+                    contextInput.setText(r.context); prefs.edit().putString("interview_context", r.context).apply()
+                }
+                loadStores()
+                storeReady.await()
+                setStatus("👤 개인정보 폴더 반영 · 파일 " + r.files + "개 · 경력 카드 " + r.facts + "개 · 면접 답 " + r.interview + "개" +
+                    (if (r.pdfRead > 0) " · PDF " + r.pdfRead + "개 새로 읽음" else "") +
+                    (if (r.problems.isNotEmpty()) " · 못 읽은 파일: " + r.problems.joinToString(", ") else ""))
+            } catch (e: CancellationException) { throw e }
+            catch (_: SecurityException) { setStatus("개인정보 폴더 권한이 없어졌습니다. ⚙ 설정 → [개인정보 폴더 선택]을 다시 해 주세요.") }
+            catch (_: Exception) { setStatus("개인정보 폴더를 읽지 못했습니다.") }
+        }
+    }
+
     private val handler = Handler(Looper.getMainLooper())
     private var recognizer: SpeechRecognizer? = null
     private var listening = false
@@ -188,7 +241,7 @@ class MainActivity : ComponentActivity() {
             if (!storeReady.await()) setStatus("개인 대화 데이터(persona)를 불러오지 못했습니다. 예시 없이 생성합니다.")
             else if (factStore.size == 0) {
                 setStatus("👤 개인 데이터가 없습니다. ⚙ 설정 → [개인 데이터 가져오기]에서 persona_bundle.json을 고르세요.")
-                if (intentBundleUri(intent) == null) askToImport()
+                if (intentBundleUri(intent) == null && folderUri() == null) askToImport()
             }
             else if (settings().key.isBlank()) setStatus("Gemini API 키가 없습니다. ⚙ 설정에서 입력하세요.")
             else setStatus("👤 개인 데이터 사용 중 · 경력 카드 " + factStore.size + "개")
@@ -215,13 +268,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun askToImport() {
-        AlertDialog.Builder(this).setTitle("개인 데이터 가져오기")
-            .setMessage("경력·논문 카드(persona_bundle.json)가 아직 없습니다. 지금 가져오지 않으면 면접 답변에 경력과 논문이 들어가지 않습니다.\n\n파일을 휴대폰에 저장한 뒤 [파일 고르기]를 누르세요. 파일을 길게 눌러 '공유 → EvenGlass 자동번역'으로 보내도 됩니다.")
+        AlertDialog.Builder(this).setTitle("개인정보 폴더 연결 (한 번만)")
+            .setMessage("휴대폰 '다운로드(Download)' 폴더 안에 '개인정보' 폴더를 만들고 persona_bundle.json, 논문 PDF, 메모(.txt)를 넣어 두세요.\n\n[폴더 선택]에서 그 '개인정보' 폴더를 한 번 고르면, 이후에는 앱을 열 때마다 자동으로 읽습니다. 파일을 바꾸면 바뀐 내용이 반영되고, 앱을 업데이트해도 다시 고를 필요가 없습니다.")
             .setNegativeButton("나중에", null)
-            .setPositiveButton("파일 고르기") { _, _ ->
-                try { pickBundle.launch(arrayOf("application/json", "text/plain", "application/octet-stream", "*/*")) }
-                catch (_: Exception) { setStatus("파일 선택 화면을 열 수 없습니다.") }
-            }.show()
+            .setPositiveButton("폴더 선택") { _, _ -> chooseFolder() }
+            .show()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        syncFolder(force = false)
     }
 
     override fun onStop() {
@@ -245,7 +301,7 @@ class MainActivity : ComponentActivity() {
     )
 
     private fun interviewConf(): LlmConfig {
-        val p = Provider.of(prefs.getString("interview_provider", Provider.CLAUDE.key))
+        val p = Provider.of(prefs.getString("interview_provider", Provider.GEMINI.key))
         return when (p) {
             Provider.GEMINI -> settings().let { LlmConfig(p, it.key, it.model) }
             Provider.CLAUDE -> LlmConfig(p, prefs.getString("claude_key", "") ?: "", prefs.getString("claude_model", p.defaultModel) ?: p.defaultModel)
@@ -925,9 +981,12 @@ class MainActivity : ComponentActivity() {
         val export = Button(this).apply { text = "기록 내보내기 (history.jsonl)" }
         val personalLabel = label("👤 개인 데이터: " + personalSummary())
         val importBtn = Button(this).apply { text = "개인 데이터 가져오기 (persona_bundle.json)" }
+        val folderLabel = label("📁 개인정보 폴더: " + (folderUri()?.let { android.net.Uri.decode(it.lastPathSegment ?: "").substringAfter(':') } ?: "연결 안 됨"))
+        val folderBtn = Button(this).apply { text = "개인정보 폴더 선택 (Download/개인정보)" }
+        val rescanBtn = Button(this).apply { text = "폴더 지금 다시 읽기" }
         val viewBtn = Button(this).apply { text = "경력 카드 보기 (내용 확인)" }
         val clearBtn = Button(this).apply { text = "개인 데이터 삭제 (샘플로 되돌리기)" }
-        listOf(geminiLabel, key, model, providerLabel, providerGroup, claudeKey, claudeModel, openaiKey, openaiModel, langLabel, group, personalLabel, importBtn, viewBtn, clearBtn, note, export)
+        listOf(geminiLabel, key, model, providerLabel, providerGroup, claudeKey, claudeModel, openaiKey, openaiModel, langLabel, group, personalLabel, folderLabel, folderBtn, rescanBtn, importBtn, viewBtn, clearBtn, note, export)
             .forEach { box.addView(it) }
         fun enteredProvider() = Provider.of(providerGroup.findViewById<RadioButton>(providerGroup.checkedRadioButtonId)?.tag as? String)
         fun enteredInterview(): LlmConfig = when (val pv = enteredProvider()) {
@@ -948,11 +1007,19 @@ class MainActivity : ComponentActivity() {
             catch (_: Exception) { setStatus("파일 선택 화면을 열 수 없습니다.") }
         }
         viewBtn.setOnClickListener { showFactCards() }
+        folderBtn.setOnClickListener { dialog.dismiss(); chooseFolder() }
+        rescanBtn.setOnClickListener {
+            dialog.dismiss()
+            if (folderUri() == null) chooseFolder() else syncFolder(force = true)
+        }
         clearBtn.setOnClickListener {
-            AlertDialog.Builder(this).setMessage("가져온 개인 데이터(경력 카드·면접 답·말투)를 이 휴대폰에서 지웁니다.")
+            AlertDialog.Builder(this).setMessage("앱 안의 개인 데이터(경력 카드·면접 답·말투·PDF 요약)를 지우고 개인정보 폴더 연결도 끊습니다. 휴대폰의 개인정보 폴더 파일은 그대로 둡니다.")
                 .setNegativeButton("취소", null)
                 .setPositiveButton("삭제") { _, _ ->
                     PersonaStore.userDir(this).deleteRecursively()
+                    File(filesDir, "persona_cache").deleteRecursively()
+                    folderUri()?.let { u -> try { contentResolver.releasePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) { } }
+                    prefs.edit().remove(PersonalFolder.PREF_URI).remove(PersonalFolder.PREF_SIGNATURE).apply()
                     loadStores()
                     dialog.dismiss()
                     setStatus("개인 데이터를 지웠습니다. 샘플 데이터로 동작합니다.")
@@ -1110,7 +1177,7 @@ class MainActivity : ComponentActivity() {
         /** Shorter utterances ("Yes", "OK") are never auto-assigned to me; use [↺ 바꾸기] if needed. */
         private const val MIN_AUTO_CHARS = 6
         private val LOCALES = listOf("en-US", "ja-JP", "zh-CN", "ru-RU", "ko-KR")
-        private const val ALL_FACTS_LIMIT = 80
+        private const val ALL_FACTS_LIMIT = 120
         private const val PLACEHOLDER = "G2 미리보기 · 예상 답변이 여기에 표시됩니다."
         private val HANGUL = Regex("[\\uac00-\\ud7a3]")
     }

@@ -35,7 +35,7 @@ internal enum class Provider(val key: String, val label: String, val defaultMode
     OPENAI("openai", "ChatGPT", "gpt-5-mini");
 
     companion object {
-        fun of(key: String?) = values().firstOrNull { it.key == key } ?: CLAUDE
+        fun of(key: String?) = values().firstOrNull { it.key == key } ?: GEMINI
     }
 }
 

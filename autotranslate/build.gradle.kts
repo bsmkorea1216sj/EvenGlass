@@ -14,8 +14,8 @@ android {
         // 26+: the Anthropic Java SDK uses java.time (all current Galaxy phones are 26+).
         minSdk = 26
         targetSdk = 34
-        versionCode = 7
-        versionName = "0.5.2"
+        versionCode = 8
+        versionName = "0.6.0"
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }

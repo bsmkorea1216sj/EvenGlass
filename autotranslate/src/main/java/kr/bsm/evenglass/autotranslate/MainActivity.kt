@@ -180,12 +180,16 @@ class MainActivity : ComponentActivity() {
         input.setOnEditorActionListener { _, id, _ -> if (id == EditorInfo.IME_ACTION_SEND) { submitTyped(); true } else false }
         findViewById<Button>(R.id.settings).setOnClickListener { showSettings() }
         loadStores()
+        intentBundleUri(intent)?.let { importBundle(it) }
         updateAsrLabel()
         setMode(Mode.of(prefs.getString("mode", Mode.CONVERSATION.key)), initial = true)
 
         lifecycleScope.launch {
             if (!storeReady.await()) setStatus("개인 대화 데이터(persona)를 불러오지 못했습니다. 예시 없이 생성합니다.")
-            else if (factStore.size == 0) setStatus("👤 개인 데이터가 없습니다. ⚙ 설정 → [개인 데이터 가져오기]에서 persona_bundle.json을 고르세요.")
+            else if (factStore.size == 0) {
+                setStatus("👤 개인 데이터가 없습니다. ⚙ 설정 → [개인 데이터 가져오기]에서 persona_bundle.json을 고르세요.")
+                if (intentBundleUri(intent) == null) askToImport()
+            }
             else if (settings().key.isBlank()) setStatus("Gemini API 키가 없습니다. ⚙ 설정에서 입력하세요.")
             else setStatus("👤 개인 데이터 사용 중 · 경력 카드 " + factStore.size + "개")
         }
@@ -196,6 +200,28 @@ class MainActivity : ComponentActivity() {
                 translatorFromKo(targetLang())?.downloadModelIfNeeded(DownloadConditions.Builder().build())?.await()
             } catch (e: CancellationException) { throw e } catch (_: Exception) { }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        intentBundleUri(intent)?.let { importBundle(it) }
+    }
+
+    /** persona_bundle.json opened with / shared to this app. */
+    private fun intentBundleUri(i: Intent?): android.net.Uri? = when (i?.action) {
+        Intent.ACTION_VIEW -> i.data
+        Intent.ACTION_SEND -> @Suppress("DEPRECATION") (i.getParcelableExtra<android.os.Parcelable>(Intent.EXTRA_STREAM) as? android.net.Uri)
+        else -> null
+    }
+
+    private fun askToImport() {
+        AlertDialog.Builder(this).setTitle("개인 데이터 가져오기")
+            .setMessage("경력·논문 카드(persona_bundle.json)가 아직 없습니다. 지금 가져오지 않으면 면접 답변에 경력과 논문이 들어가지 않습니다.\n\n파일을 휴대폰에 저장한 뒤 [파일 고르기]를 누르세요. 파일을 길게 눌러 '공유 → EvenGlass 자동번역'으로 보내도 됩니다.")
+            .setNegativeButton("나중에", null)
+            .setPositiveButton("파일 고르기") { _, _ ->
+                try { pickBundle.launch(arrayOf("application/json", "text/plain", "application/octet-stream", "*/*")) }
+                catch (_: Exception) { setStatus("파일 선택 화면을 열 수 없습니다.") }
+            }.show()
     }
 
     override fun onStop() {
@@ -899,8 +925,9 @@ class MainActivity : ComponentActivity() {
         val export = Button(this).apply { text = "기록 내보내기 (history.jsonl)" }
         val personalLabel = label("👤 개인 데이터: " + personalSummary())
         val importBtn = Button(this).apply { text = "개인 데이터 가져오기 (persona_bundle.json)" }
+        val viewBtn = Button(this).apply { text = "경력 카드 보기 (내용 확인)" }
         val clearBtn = Button(this).apply { text = "개인 데이터 삭제 (샘플로 되돌리기)" }
-        listOf(geminiLabel, key, model, providerLabel, providerGroup, claudeKey, claudeModel, openaiKey, openaiModel, langLabel, group, personalLabel, importBtn, clearBtn, note, export)
+        listOf(geminiLabel, key, model, providerLabel, providerGroup, claudeKey, claudeModel, openaiKey, openaiModel, langLabel, group, personalLabel, importBtn, viewBtn, clearBtn, note, export)
             .forEach { box.addView(it) }
         fun enteredProvider() = Provider.of(providerGroup.findViewById<RadioButton>(providerGroup.checkedRadioButtonId)?.tag as? String)
         fun enteredInterview(): LlmConfig = when (val pv = enteredProvider()) {
@@ -920,6 +947,7 @@ class MainActivity : ComponentActivity() {
             try { pickBundle.launch(arrayOf("application/json", "text/plain", "application/octet-stream", "*/*")) }
             catch (_: Exception) { setStatus("파일 선택 화면을 열 수 없습니다.") }
         }
+        viewBtn.setOnClickListener { showFactCards() }
         clearBtn.setOnClickListener {
             AlertDialog.Builder(this).setMessage("가져온 개인 데이터(경력 카드·면접 답·말투)를 이 휴대폰에서 지웁니다.")
                 .setNegativeButton("취소", null)
@@ -969,6 +997,21 @@ class MainActivity : ComponentActivity() {
                 note.text = lines.joinToString("\n")
                 test.isEnabled = true
             }
+        }
+    }
+
+    /** Lists the loaded fact cards so the owner can check what the AI is told. */
+    private fun showFactCards() {
+        lifecycleScope.launch {
+            storeReady.await()
+            val cards = factStore.all()
+            val body = if (cards.isEmpty()) "가져온 경력 카드가 없습니다. [개인 데이터 가져오기]로 persona_bundle.json을 고르세요."
+                else cards.mapIndexed { i, h -> "F" + (i + 1) + ". " + h.pair.q.replace(" | ", "\n") }.joinToString("\n\n")
+            val pad = (16 * resources.displayMetrics.density).toInt()
+            val tv = TextView(this@MainActivity).apply { text = body; setTextIsSelectable(true); setPadding(pad, pad / 2, pad, 0) }
+            AlertDialog.Builder(this@MainActivity).setTitle("경력 카드 " + cards.size + "개")
+                .setView(android.widget.ScrollView(this@MainActivity).apply { addView(tv) })
+                .setPositiveButton("닫기", null).show()
         }
     }
 

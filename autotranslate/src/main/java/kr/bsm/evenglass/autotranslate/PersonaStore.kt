@@ -116,6 +116,18 @@ internal class PersonaStore(private val context: Context) {
             return small.entries.sumOf { (g, w) -> w * (big[g] ?: 0.0) }
         }
 
+        /**
+         * Share of the utterance's n-grams that also occur in [source] (0..1). High when someone reads
+         * out all or part of [source]; low when new words are added, even if some words are reused.
+         */
+        fun containment(utterance: String, source: String): Double {
+            val u = termFreq(utterance)
+            val total = u.values.sum()
+            if (total == 0) return 0.0
+            val s = termFreq(source)
+            return u.entries.sumOf { (g, c) -> minOf(c, s[g] ?: 0) }.toDouble() / total
+        }
+
         /** Plain (unweighted) n-gram cosine for comparing two sentences. */
         fun similarity(x: String, y: String): Double {
             fun unit(tf: Map<String, Int>): Map<String, Double> {

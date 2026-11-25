@@ -84,6 +84,18 @@ class MainActivity : ComponentActivity() {
     private var overrideLocale: String? = null
     private var lastOtherLang = "en"
     private var replyJob: Job? = null
+
+    /** Who said the most recent utterance, so a wrong guess can be flipped with [↺ 바꾸기]. */
+    private enum class Speaker { OTHER, ME }
+    private data class Last(val speaker: Speaker, val text: String, val prevMyReply: String? = null)
+    /** Screen state before the latest "other" utterance, restored when it is flipped to "me". */
+    private data class Screen(val other: CharSequence, val lang: CharSequence, val translation: CharSequence,
+                              val answers: CharSequence, val latency: CharSequence, val otherLang: String,
+                              val suggestions: List<String>)
+    private var last: Last? = null
+    private var prevScreen: Screen? = null
+    private var suggestions: List<String> = emptyList()
+    private lateinit var flipBtn: Button
     private val silence = Runnable { onSilence() }
     private val restart = Runnable { startSession() }
 
@@ -103,6 +115,8 @@ class MainActivity : ComponentActivity() {
         asrLang = findViewById(R.id.asrLang)
         listenBtn = findViewById(R.id.listen)
         myReplyBtn = findViewById(R.id.myReply)
+        flipBtn = findViewById(R.id.flip)
+        flipBtn.setOnClickListener { flipLast() }
         input = findViewById(R.id.input)
 
         listenBtn.setOnClickListener { if (listening) stopListening() else startListening() }
@@ -239,7 +253,7 @@ class MainActivity : ComponentActivity() {
             val text = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim()
             if (text.isNullOrEmpty() || text == partial) return
             partial = text
-            if (awaitingMyReply) setStatus("내 답 인식 중: " + text) else other.text = "… " + text
+            setStatus((if (awaitingMyReply) "🙋 내 말 듣는 중: " else "🎙 ") + text)
             handler.removeCallbacks(silence)
             handler.postDelayed(silence, SILENCE_MS)
         }
@@ -281,8 +295,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Decides who spoke:
+     * 1) [🙋 다음은 내 말] was pressed → me;
+     * 2) at least 70% of what was said appears in a suggestion on screen (I read all or part of it) → me;
+     * 3) otherwise → the other person (translate + suggest).
+     * A wrong guess can be fixed with [↺ 바꾸기].
+     */
     private fun deliver(text: String) {
-        if (awaitingMyReply) recordMyReply(text) else handleUtterance(text)
+        if (awaitingMyReply) { recordMine(text, "manual"); return }
+        val longEnough = PersonaStore.normalize(text).replace(" ", "").length >= MIN_AUTO_CHARS
+        if (longEnough && suggestions.any { PersonaStore.containment(text, it) >= MATCH_ME }) {
+            recordMine(text, "auto-match"); return
+        }
+        handleUtterance(text)
     }
 
     private fun submitTyped() {
@@ -297,20 +323,19 @@ class MainActivity : ComponentActivity() {
     private fun toggleMyReply() {
         if (awaitingMyReply) {
             setMyReplyMode(false)
-            setStatus("내 답 기록 취소")
+            setStatus("내 말 모드 취소")
             return
         }
-        if (!history.hasPending) { setStatus("먼저 상대 발화가 있어야 내 답을 기록할 수 있습니다."); return }
         setMyReplyMode(true)
-        setStatus(if (listening) "다음 발화를 내 답으로 기록합니다 · 인식 언어 " + currentLocale()
-            else "[듣기 시작] 후 말하거나 입력창에 내 답을 입력하세요.")
+        setStatus(if (listening) "🙋 다음 발화는 내 말로 처리합니다(예상 답변 없음) · 인식 언어 " + currentLocale()
+            else "[듣기 시작] 후 말하거나 입력창에 내 말을 입력하세요.")
     }
 
     /** While on, the recognizer uses the other person's language and the next utterance is SJK's reply. */
     private fun setMyReplyMode(on: Boolean) {
         awaitingMyReply = on
         overrideLocale = if (on) localeFor(lastOtherLang) else null
-        myReplyBtn.text = if (on) "내 답 기록 중 (취소)" else "내 답 기록"
+        myReplyBtn.text = if (on) "🙋 내 말 대기 (취소)" else "🙋 다음은 내 말"
         myReplyBtn.setTextColor(if (on) ContextCompat.getColor(this, R.color.green) else ContextCompat.getColor(this, R.color.txt))
         updateAsrLabel()
         if (listening) {
@@ -320,14 +345,48 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun recordMyReply(text: String) {
-        val matched = history.setMyReply(text)
-        setMyReplyMode(false)
-        setStatus("내 답 기록됨: " + text + when (matched) {
-            0 -> " · 제시안 ①과 일치"
-            1 -> " · 제시안 ②와 일치"
-            else -> " · 제시안과 다름(정답 예시로 저장)"
-        })
+    /** Records an utterance as my own words: no translation request, no suggestions. */
+    private fun recordMine(text: String, source: String) {
+        if (awaitingMyReply) setMyReplyMode(false)
+        if (!history.hasPending) {
+            last = Last(Speaker.ME, text)
+            setStatus("🙋 내 말: " + text + " (기록할 상대 발화가 아직 없습니다) · 상대 말이었으면 [↺ 바꾸기]")
+            return
+        }
+        val (prev, matched) = history.setMyReply(text, source)
+        last = Last(Speaker.ME, text, prev)
+        val why = when (source) { "auto-match" -> "제시안과 같아서 자동 구별"; "corrected" -> "바꾸기로 정정"; else -> "내 말 모드" }
+        setStatus("🙋 내 말: " + text + " · " + when (matched) {
+            0 -> "①과 일치"; 1 -> "②와 일치"; else -> "제시안과 다름(정답 예시로 기록)"
+        } + " · " + why + " · 상대 말이었으면 [↺ 바꾸기]")
+    }
+
+    /** [↺ 바꾸기]: the latest utterance was attributed to the wrong person — swap it. */
+    private fun flipLast() {
+        val l = last ?: run { setStatus("바꿀 발화가 없습니다."); return }
+        when (l.speaker) {
+            Speaker.OTHER -> {
+                replyJob?.cancel()
+                history.discardLast()
+                prevScreen?.let { restoreScreen(it) } ?: run {
+                    other.text = ""; langView.text = "감지 언어: -"; translation.text = ""
+                    answers.text = "G2 미리보기 · 예상 답변이 여기에 표시됩니다."; latency.text = ""; suggestions = emptyList()
+                }
+                prevScreen = null
+                recordMine(l.text, "corrected")
+            }
+            Speaker.ME -> {
+                if (history.hasPending) history.restoreMyReply(l.prevMyReply)
+                last = null
+                handleUtterance(l.text)
+                setStatus("상대 말로 바꿨습니다 · 예상 답변을 만듭니다")
+            }
+        }
+    }
+
+    private fun restoreScreen(sc: Screen) {
+        other.text = sc.other; langView.text = sc.lang; translation.text = sc.translation
+        answers.text = sc.answers; latency.text = sc.latency; lastOtherLang = sc.otherLang; suggestions = sc.suggestions
     }
 
     private fun localeFor(lang: String) = when (lang) {
@@ -338,6 +397,10 @@ class MainActivity : ComponentActivity() {
 
     private fun handleUtterance(text: String) {
         replyJob?.cancel()
+        prevScreen = Screen(other.text, langView.text, translation.text, answers.text, latency.text, lastOtherLang, suggestions)
+        last = Last(Speaker.OTHER, text)
+        suggestions = emptyList()
+        history.begin(text, "", "")
         other.text = text
         translation.text = ""
         answers.text = "답변 만드는 중…"
@@ -347,7 +410,7 @@ class MainActivity : ComponentActivity() {
             val lang = detectLanguage(text)
             lastOtherLang = lang
             langView.text = "감지 언어: " + lang + " (" + ReplyEngine.langName(lang) + ")"
-            history.begin(text, lang, "")
+            history.setLang(lang)
 
             val machine = if (lang == "ko") null else withTimeoutOrNull(1500L) { translateToKo(text, lang) }
             if (!machine.isNullOrBlank()) translation.text = machine + "  (기기 번역)"
@@ -437,6 +500,7 @@ class MainActivity : ComponentActivity() {
             if (r.lang != "en" && r.lang != "ko") line(a.koPron)
         }
         answers.text = sb
+        suggestions = r.answers.map { it.text }
     }
 
     // ---------------- Settings / export ----------------
@@ -529,6 +593,10 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val SILENCE_MS = 1200L
+        /** Share of the utterance found in a shown suggestion above which it is taken as my own words. */
+        private const val MATCH_ME = 0.7
+        /** Shorter utterances ("Yes", "OK") are never auto-assigned to me; use [↺ 바꾸기] if needed. */
+        private const val MIN_AUTO_CHARS = 6
         private val LOCALES = listOf("en-US", "ja-JP", "zh-CN", "ko-KR")
     }
 }

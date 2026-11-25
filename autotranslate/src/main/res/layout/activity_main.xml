@@ -160,7 +160,16 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="내 답 기록"
+            android:text="🙋 다음은 내 말"
+            android:textColor="@color/txt" />
+
+        <Button
+            android:id="@+id/flip"
+            style="?android:attr/buttonBarButtonStyle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="0.8"
+            android:text="↺ 바꾸기"
             android:textColor="@color/txt" />
     </LinearLayout>
 

@@ -16,7 +16,16 @@ A Samsung Galaxy app that translates Japanese seen through the camera into Korea
 ## Camera app: EvenGlass 0.5.1 (`app/` module)
 - versionCode 7; versionName 0.5.1. Same as 0.4.0 functionally; the [대화 도우미] screen added in 0.5.0 was moved out to the separate app below. GeminiClient keeps the 0.5.0 refactor (shared `generateJson`).
 
-## Separate app: EvenGlass 자동번역 0.1.0 (`autotranslate/` module)
+## Separate app: EvenGlass 자동번역 0.2.0 (`autotranslate/` module)
+- **0.2.0 (versionCode 2): tells my words apart from the other person's.** Only the other person's words get translation + suggestions; mine are logged as `my_reply` with no Gemini call. Decision per utterance:
+  1. **[🙋 다음은 내 말]** pressed (manual, also switches the recognizer to the other person's language) → me.
+  2. **Auto:** ≥ 70% of the utterance's character n-grams appear in a suggestion on screen (containment, i.e. I read all or part of ①/②) and the utterance has ≥ 6 characters → me. Tested on samples: reading a suggestion fully/partly → 0.77–1.0; the other person's follow-ups reusing some words → 0.21–0.46. Very short replies ("Yes") are never auto-assigned.
+  3. Otherwise → the other person.
+  - **[↺ 바꾸기]** flips the latest guess: other→me cancels the generation, restores the previous screen and records the text as my reply; me→other undoes the my_reply and generates suggestions.
+  - Partial recognition text now goes to the status line instead of overwriting the other person's text.
+  - History keeps the last two records in memory so late replies/corrections still apply; several my-reply chunks are joined; `my_reply_source` = manual / auto-match / corrected.
+  - Not done (possible next steps): voice-based speaker identification (Android's SpeechRecognizer doesn't expose audio, would need own AudioRecord + a speaker-embedding model) and loudness-based detection (phone near my mouth → louder; needs calibration).
+- 0.1.0: first separate release.
 - Conversation auto-translation + reply suggestions is a **separate app** from the camera translator: module `:autotranslate`, applicationId `kr.bsm.evenglass.autotranslate`, label "EvenGlass 자동번역", versionCode 1 / 0.1.0, its own launcher icon (green speech bubble "EN"). Installs side by side with EvenGlass. It first shipped inside EvenGlass 0.5.0 as a [대화 도우미] screen; moved out in camera app 0.5.1 because the purposes differ.
 - Default recognition language **English (en-US)**; language ID can still detect ja/zh/ko. Input is the **phone's microphone** via Android speech recognition (no G2).
 - Its own ⚙ 설정: Gemini API key (password field, private prefs, FLAG_SECURE) + model + connection test, recognition language, [기록 내보내기]. The key must be entered separately from the camera app (separate app sandbox).
@@ -57,6 +66,7 @@ A Samsung Galaxy app that translates Japanese seen through the camera into Korea
 - Allow "install unknown apps"; Play Protect may warn about a debug-signed app — choose install anyway.
 
 ## Status
+- 자동번역 0.2.0 build: result recorded after push.
 - Two-app build succeeded (Actions run 45662252734 → release v0.5.1-build9: EvenGlass.apk ≈ 53 MB, EvenGlass-AutoTranslate.apk ≈ 34 MB). Not yet tested on a device.
 - 0.5.0 build succeeded on the first try (Actions run 45660726560 → release v0.5.0-build7, EvenGlass.apk ≈ 55 MB). Not yet tested on a real Galaxy device (speech recognition, latency, suggestion quality).
 - 0.4.0 source implementation; build and device verification pending.

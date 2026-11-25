@@ -46,25 +46,29 @@ internal object ReplyEngine {
 }
 
 /**
- * logs/history.jsonl in app-private storage: one line per utterance with the other's words,
- * the two suggestions shown, and what SJK actually said (if recorded).
+ * logs/history.jsonl in app-private storage: one line per utterance of the other person with the
+ * two suggestions shown and what SJK actually said. The last two records stay in memory so a late
+ * reply or a "상대 말 ↔ 내 말" correction can still change them; older ones are appended to the file.
  */
 internal class HistoryLog(context: Context) {
     val file = File(File(context.filesDir, "logs").apply { mkdirs() }, "history.jsonl")
-    private var pending: JSONObject? = null
+    private val open = ArrayDeque<JSONObject>()
     private val iso = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
 
-    val hasPending get() = pending != null
+    val hasPending: Boolean
+        @Synchronized get() = open.isNotEmpty()
 
-    /** Starts a new record; any previous unfinished record is written first. */
     @Synchronized fun begin(other: String, lang: String, translationKo: String) {
-        flush()
-        pending = JSONObject().put("ts", iso.format(Date())).put("other", other).put("lang", lang)
-            .put("translation_ko", translationKo).put("suggestions", JSONArray()).put("my_reply", JSONObject.NULL)
+        open.addLast(JSONObject().put("ts", iso.format(Date())).put("other", other).put("lang", lang)
+            .put("translation_ko", translationKo).put("suggestions", JSONArray()).put("my_reply", JSONObject.NULL))
+        while (open.size > 2) write(open.removeFirst())
     }
 
+    /** Drops the newest record (it turned out to be SJK's own words, not the other person's). */
+    @Synchronized fun discardLast() { open.removeLastOrNull() }
+
     @Synchronized fun setSuggestions(result: ReplyResult, latencyMs: Long, examples: List<Hit>) {
-        val p = pending ?: return
+        val p = open.lastOrNull() ?: return
         p.put("lang", result.lang)
         if (result.translationKo.isNotEmpty()) p.put("translation_ko", result.translationKo)
         p.put("suggestions", JSONArray().apply {
@@ -74,31 +78,56 @@ internal class HistoryLog(context: Context) {
         p.put("example_ids", JSONArray().apply { examples.forEach { put(it.pair.id) } })
     }
 
-    @Synchronized fun setError(message: String) { pending?.put("error", message) }
+    @Synchronized fun setLang(lang: String) { open.lastOrNull()?.put("lang", lang) }
 
-    /** Records SJK's actual reply, marks which suggestion it matched (if any), and writes the line. */
-    @Synchronized fun setMyReply(text: String): Int {
-        val p = pending ?: return -1
-        p.put("my_reply", text)
-        val sugg = p.optJSONArray("suggestions") ?: JSONArray()
-        var best = -1
-        var bestScore = 0.0
-        for (i in 0 until sugg.length()) {
-            val s = PersonaStore.similarity(text, sugg.getJSONObject(i).optString("text"))
-            if (s > bestScore) { bestScore = s; best = i }
+    @Synchronized fun setError(message: String) { open.lastOrNull()?.put("error", message) }
+
+    /**
+     * Appends SJK's actual reply to the newest record (several chunks are joined) and marks which
+     * suggestion it matched. Returns the previous my_reply (for undo) and the matched index (-1 = none).
+     */
+    @Synchronized fun setMyReply(text: String, source: String): kotlin.Pair<String?, Int> {
+        val p = open.lastOrNull() ?: return kotlin.Pair(null, -1)
+        val prev = if (p.isNull("my_reply")) null else p.optString("my_reply")
+        val full = if (prev.isNullOrEmpty()) text else "$prev $text"
+        p.put("my_reply", full).put("my_reply_source", source)
+        val (best, score) = bestMatch(full, suggestionTexts(p))
+        val matched = if (score >= 0.6) best else -1
+        p.put("matched_suggestion", matched).put("match_score", Math.round(score * 100) / 100.0)
+        return kotlin.Pair(prev, matched)
+    }
+
+    /** Undo of setMyReply. */
+    @Synchronized fun restoreMyReply(prev: String?) {
+        val p = open.lastOrNull() ?: return
+        if (prev == null) {
+            p.put("my_reply", JSONObject.NULL)
+            p.remove("my_reply_source"); p.remove("matched_suggestion"); p.remove("match_score")
+        } else p.put("my_reply", prev)
+    }
+
+    @Synchronized fun flush() { while (open.isNotEmpty()) write(open.removeFirst()) }
+
+    private fun write(o: JSONObject) { try { file.appendText(o.toString() + "\n") } catch (_: Exception) { } }
+
+    fun count(): Int = (try { if (file.exists()) file.useLines { l -> l.count { it.isNotBlank() } } else 0 } catch (_: Exception) { 0 }) +
+        synchronized(this) { open.size }
+
+    companion object {
+        private fun suggestionTexts(p: JSONObject): List<String> {
+            val arr = p.optJSONArray("suggestions") ?: return emptyList()
+            return (0 until arr.length()).map { arr.getJSONObject(it).optString("text") }
         }
-        val matched = if (bestScore >= 0.6) best else -1
-        p.put("matched_suggestion", matched)
-        p.put("match_score", Math.round(bestScore * 100) / 100.0)
-        flush()
-        return matched
-    }
 
-    @Synchronized fun flush() {
-        val p = pending ?: return
-        pending = null
-        try { file.appendText(p.toString() + "\n") } catch (_: Exception) { }
+        /** Best suggestion index and n-gram similarity for a spoken sentence. */
+        fun bestMatch(text: String, suggestions: List<String>): kotlin.Pair<Int, Double> {
+            var best = -1
+            var bestScore = 0.0
+            suggestions.forEachIndexed { i, s ->
+                val sc = PersonaStore.similarity(text, s)
+                if (sc > bestScore) { bestScore = sc; best = i }
+            }
+            return kotlin.Pair(best, bestScore)
+        }
     }
-
-    fun count(): Int = try { if (file.exists()) file.useLines { l -> l.count { it.isNotBlank() } } else 0 } catch (_: Exception) { 0 }
 }

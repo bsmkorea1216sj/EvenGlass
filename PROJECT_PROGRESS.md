@@ -24,7 +24,6 @@ A Samsung Galaxy app that translates Japanese seen through the camera into Korea
 - Generation: same Gemini key/model as the main settings (no key in code or repo). REST `generateContent`, `responseMimeType: application/json`. Prompt = style.md + 5 retrieved examples + other's words + detected language + "당신은 SJK입니다. 위 예시의 말투로, 상대가 쓴 언어로 짧은 답변(1~2문장) 2개를 서로 다른 방향으로 만드세요." Output `{"lang","translation_ko","answers":[{"text","ko_meaning","ko_pron"}]}`; `ko_pron` forced empty for English. For `flash` models thinking is turned off (`thinkingBudget: 0`) for latency; if the model rejects it (HTTP 400) the call is retried once without it.
 - Recycling log: `files/logs/history.jsonl` (app-private), one line per utterance: `ts, other, lang, translation_ko, suggestions[2], latency_ms, example_ids, my_reply, matched_suggestion (0/1/-1), match_score, error`. **[내 답 기록]** switches the recognizer to the other person's language and records the next utterance (or typed text) as SJK's actual reply; it's compared to the suggestions (n-gram similarity ≥ 0.6 = matched). A record is written when the reply is recorded, when the next utterance starts, on export or when the screen is closed. ⚙ 설정 → **[기록 내보내기]** shares the jsonl via FileProvider + share sheet.
 - Privacy: recognized speech of the other person is sent to Gemini and kept in the local log — tell the other person / get consent (see architecture §7).
-- Build/device status: see Status below.
 
 ## Previous version: 0.4.0 (Gemini-assisted translation)
 - versionCode 5; versionName 0.4.0.
@@ -51,7 +50,7 @@ A Samsung Galaxy app that translates Japanese seen through the camera into Korea
 - Allow "install unknown apps"; Play Protect may warn about a debug-signed app — choose install anyway.
 
 ## Status
-- 0.5.0 source implementation; GitHub Actions build result recorded below after push. Not yet tested on a real Galaxy device (speech recognition, latency, suggestion quality).
+- 0.5.0 build succeeded on the first try (Actions run 45660726560 → release v0.5.0-build7, EvenGlass.apk ≈ 55 MB). Not yet tested on a real Galaxy device (speech recognition, latency, suggestion quality).
 - 0.4.0 source implementation; build and device verification pending.
 - 0.3.0 build succeeded (v0.3.0-build5). **Not yet tested on a real Galaxy device** (camera, OCR accuracy, translation quality, speed).
 

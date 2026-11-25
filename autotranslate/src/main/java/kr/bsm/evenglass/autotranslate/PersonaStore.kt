@@ -16,13 +16,17 @@ internal data class Hit(val pair: PersonaPair, val score: Double)
 /**
  * On-device store of (other's utterance, SJK reply) pairs.
  *
- * - assets/persona/pairs.jsonl is imported into SQLite (persona.db) whenever its hash changes.
+ * - assets/persona/pairs.jsonl (conversation) or interview_pairs.jsonl (interview) is imported into SQLite (persona.db) whenever its hash changes.
  * - Search: character 2/3-gram TF-IDF cosine similarity over the `q` column (fallback for an
  *   on-device multilingual embedder — see PROJECT_PROGRESS.md). The `emb` column is reserved
  *   for embedding vectors so a vector search can be dropped in later without a schema change.
  */
-internal class PersonaStore(private val context: Context) {
-    private val helper = object : SQLiteOpenHelper(context, "persona.db", null, 1) {
+internal class PersonaStore(
+    private val context: Context,
+    private val pairsAsset: String = "persona/pairs.jsonl",
+    dbName: String = "persona.db"
+) {
+    private val helper = object : SQLiteOpenHelper(context, dbName, null, 1) {
         override fun onCreate(db: SQLiteDatabase) {
             db.execSQL("CREATE TABLE pairs(id INTEGER PRIMARY KEY AUTOINCREMENT, q TEXT NOT NULL, a TEXT NOT NULL, lang TEXT NOT NULL, emb BLOB)")
             db.execSQL("CREATE TABLE meta(k TEXT PRIMARY KEY, v TEXT)")
@@ -40,7 +44,7 @@ internal class PersonaStore(private val context: Context) {
     /** Blocking; call off the main thread. */
     fun load() {
         style = context.assets.open("persona/style.md").bufferedReader().use { it.readText() }.trim()
-        val raw = context.assets.open("persona/pairs.jsonl").bufferedReader().use { it.readText() }
+        val raw = context.assets.open(pairsAsset).bufferedReader().use { it.readText() }
         val hash = MessageDigest.getInstance("SHA-256").digest(raw.toByteArray())
             .joinToString("") { "%02x".format(it) }
         val db = helper.writableDatabase

@@ -11,10 +11,11 @@ android {
 
     defaultConfig {
         applicationId = "kr.bsm.evenglass.autotranslate"
-        minSdk = 24
+        // 26+: the Anthropic Java SDK uses java.time (all current Galaxy phones are 26+).
+        minSdk = 26
         targetSdk = 34
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.4.0"
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
@@ -34,6 +35,17 @@ android {
         jvmTarget = "17"
     }
 
+    packaging {
+        resources {
+            excludes += setOf(
+                "META-INF/DEPENDENCIES", "META-INF/INDEX.LIST",
+                "META-INF/LICENSE*", "META-INF/NOTICE*", "META-INF/*.md",
+                "META-INF/versions/*/module-info.class", "module-info.class",
+                "META-INF/{AL2.0,LGPL2.1}"
+            )
+        }
+    }
+
     lint {
         checkReleaseBuilds = false
         abortOnError = false
@@ -45,6 +57,8 @@ dependencies {
     implementation("androidx.activity:activity-ktx:1.9.2")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // 면접 mode: Claude via the official Anthropic Java SDK (ChatGPT via plain REST)
+    implementation("com.anthropic:anthropic-java:3.14.0")
 
     // On-device language identification and X->ko translation
     implementation("com.google.mlkit:language-id:17.0.6")

@@ -63,16 +63,33 @@ class MainActivity : ComponentActivity() {
     private lateinit var listenBtn: Button
     private lateinit var myReplyBtn: Button
     private lateinit var input: EditText
+    private lateinit var tabConv: TextView
+    private lateinit var tabInterview: TextView
+    private lateinit var interviewBar: View
+    private lateinit var roleAnswer: TextView
+    private lateinit var roleAsk: TextView
+    private lateinit var contextInput: EditText
+    private lateinit var otherLabel: TextView
+
+    /** Current top tab (회화 / 면접) and, in 면접, my role. */
+    private var mode = Mode.CONVERSATION
+    private var currentResult: ReplyResult? = null
+    private var previewItems: List<NextItem> = emptyList()
+    private var previewJob: Job? = null
+    /** Recent interview lines ("면접관: …", "SJK: …") sent as context to the interview AI. */
+    private val transcript = ArrayDeque<String>()
 
     private val geminiPrefs by lazy { getSharedPreferences("gemini_settings", MODE_PRIVATE) }
     private val prefs by lazy { getSharedPreferences("reply_assist", MODE_PRIVATE) }
-    private val store by lazy { PersonaStore(applicationContext) }
+    private val convStore by lazy { PersonaStore(applicationContext) }
+    private val interviewStore by lazy { PersonaStore(applicationContext, "persona/interview_pairs.jsonl", "persona_interview.db") }
+    private val store get() = if (mode.isInterview) interviewStore else convStore
     private val history by lazy { HistoryLog(applicationContext) }
     private val langId by lazy { LanguageIdentification.getClient() }
     private val translators = HashMap<String, Translator>()
     private val storeReady by lazy {
         lifecycleScope.async(Dispatchers.IO) {
-            try { store.load(); true } catch (_: Exception) { false }
+            try { convStore.load(); interviewStore.load(); true } catch (_: Exception) { false }
         }
     }
 
@@ -128,6 +145,19 @@ class MainActivity : ComponentActivity() {
         koreanBtn.setOnClickListener { toggleKorean() }
         answersBody = answers.text
         input = findViewById(R.id.input)
+        tabConv = findViewById(R.id.tabConv)
+        tabInterview = findViewById(R.id.tabInterview)
+        interviewBar = findViewById(R.id.interviewBar)
+        roleAnswer = findViewById(R.id.roleAnswer)
+        roleAsk = findViewById(R.id.roleAsk)
+        contextInput = findViewById(R.id.interviewContext)
+        otherLabel = findViewById(R.id.otherLabel)
+        contextInput.setText(prefs.getString("interview_context", ""))
+        tabConv.setOnClickListener { setMode(Mode.CONVERSATION) }
+        tabInterview.setOnClickListener { setMode(Mode.of(prefs.getString("interview_role", Mode.INTERVIEW_ANSWER.key)).takeIf { it.isInterview } ?: Mode.INTERVIEW_ANSWER) }
+        roleAnswer.setOnClickListener { setMode(Mode.INTERVIEW_ANSWER) }
+        roleAsk.setOnClickListener { setMode(Mode.INTERVIEW_ASK) }
+        findViewById<Button>(R.id.preview).setOnClickListener { previewInterview() }
 
         listenBtn.setOnClickListener { if (listening) stopListening() else startListening() }
         myReplyBtn.setOnClickListener { toggleMyReply() }
@@ -135,6 +165,7 @@ class MainActivity : ComponentActivity() {
         input.setOnEditorActionListener { _, id, _ -> if (id == EditorInfo.IME_ACTION_SEND) { submitTyped(); true } else false }
         findViewById<Button>(R.id.settings).setOnClickListener { showSettings() }
         updateAsrLabel()
+        setMode(Mode.of(prefs.getString("mode", Mode.CONVERSATION.key)), initial = true)
 
         lifecycleScope.launch {
             if (!storeReady.await()) setStatus("개인 대화 데이터(persona)를 불러오지 못했습니다. 예시 없이 생성합니다.")
@@ -168,6 +199,99 @@ class MainActivity : ComponentActivity() {
         geminiPrefs.getString("api_key", "") ?: "",
         geminiPrefs.getString("model", GeminiClient.DEFAULT_MODEL) ?: GeminiClient.DEFAULT_MODEL
     )
+
+    private fun interviewConf(): LlmConfig {
+        val p = Provider.of(prefs.getString("interview_provider", Provider.CLAUDE.key))
+        return when (p) {
+            Provider.GEMINI -> settings().let { LlmConfig(p, it.key, it.model) }
+            Provider.CLAUDE -> LlmConfig(p, prefs.getString("claude_key", "") ?: "", prefs.getString("claude_model", p.defaultModel) ?: p.defaultModel)
+            Provider.OPENAI -> LlmConfig(p, prefs.getString("openai_key", "") ?: "", prefs.getString("openai_model", p.defaultModel) ?: p.defaultModel)
+        }
+    }
+
+    /** AI used for the current tab: 회화 → Gemini, 면접 → the provider chosen in settings. */
+    private fun activeConf(): LlmConfig =
+        if (mode.isInterview) interviewConf() else settings().let { LlmConfig(Provider.GEMINI, it.key, it.model) }
+
+    // ---------------- Tabs ----------------
+
+    private fun setMode(m: Mode, initial: Boolean = false) {
+        if (m == mode && !initial) return
+        val tabChanged = m.isInterview != mode.isInterview || initial
+        mode = m
+        val edit = prefs.edit().putString("mode", m.key)
+        if (m.isInterview) edit.putString("interview_role", m.key)
+        edit.apply()
+        val on = ContextCompat.getColor(this, R.color.green)
+        val off = ContextCompat.getColor(this, R.color.mut)
+        tabConv.setTextColor(if (m.isInterview) off else on)
+        tabInterview.setTextColor(if (m.isInterview) on else off)
+        tabConv.setBackgroundColor(if (m.isInterview) Color.TRANSPARENT else ContextCompat.getColor(this, R.color.card))
+        tabInterview.setBackgroundColor(if (m.isInterview) ContextCompat.getColor(this, R.color.card) else Color.TRANSPARENT)
+        interviewBar.visibility = if (m.isInterview) View.VISIBLE else View.GONE
+        roleAnswer.setTextColor(if (m == Mode.INTERVIEW_ANSWER) on else off)
+        roleAsk.setTextColor(if (m == Mode.INTERVIEW_ASK) on else off)
+        otherLabel.text = when (m) {
+            Mode.CONVERSATION -> "상대 원문"
+            Mode.INTERVIEW_ANSWER -> "면접관 질문"
+            Mode.INTERVIEW_ASK -> "지원자 답변"
+        }
+        if (tabChanged) {
+            replyJob?.cancel(); previewJob?.cancel(); interpJob?.cancel()
+            other.text = if (m.isInterview) "면접 정보를 적고 [🔮 예상 질문]을 누르면 나올 질문과 답을 미리 보여 줍니다. [듣기 시작]으로 실제 면접을 듣습니다."
+                else "[듣기 시작]을 누르거나 아래 입력창에 상대가 한 말을 입력하세요."
+            langView.text = "감지 언어: -"
+            translation.text = ""
+            latency.text = ""
+            currentInterp = null; currentResult = null; previewItems = emptyList()
+            suggestions = emptyList(); prevScreen = null; last = null
+            setAnswersBody(PLACEHOLDER)
+        }
+        if (!initial) setStatus(when (m) {
+            Mode.CONVERSATION -> "💬 회화 모드 · Gemini"
+            Mode.INTERVIEW_ANSWER -> "🎤 면접 모드 · 내가 답변자 · " + interviewConf().provider.label
+            Mode.INTERVIEW_ASK -> "🎤 면접 모드 · 내가 면접관 · " + interviewConf().provider.label
+        })
+    }
+
+    private fun interviewContext(): String {
+        val c = contextInput.text.toString().trim()
+        prefs.edit().putString("interview_context", c).apply()
+        return c
+    }
+
+    private fun addTranscript(line: String) {
+        if (!mode.isInterview) return
+        transcript.addLast(line)
+        while (transcript.size > 8) transcript.removeFirst()
+    }
+
+    /** 🔮 Likely next interview turns, with prepared answers — before the interview or between questions. */
+    private fun previewInterview() {
+        val conf = interviewConf()
+        val context = interviewContext()
+        val lang = targetLang()
+        previewJob?.cancel()
+        setAnswersBody("🔮 예상 질문을 만드는 중… (" + conf.provider.label + ")")
+        previewJob = lifecycleScope.launch {
+            val start = SystemClock.elapsedRealtime()
+            storeReady.await()
+            val hits = if (context.isNotBlank()) interviewStore.search(listOf(context), 5) else emptyList()
+            try {
+                val o = LlmClient.json(conf, ReplyEngine.buildPreviewPrompt(interviewStore.style, hits, context, transcript.toList(), lang, mode))
+                previewItems = ReplyEngine.parseNext(o, lang)
+                if (previewItems.isEmpty()) throw GeminiException("예상 질문이 비어 있습니다.")
+                currentResult = null
+                suggestions = previewItems.map { it.answer }.filter { it.isNotBlank() }
+                renderAnswers()
+                val ms = SystemClock.elapsedRealtime() - start
+                latency.text = ms.toString() + " ms"
+                setStatus("🔮 예상 " + previewItems.size + "개 · " + conf.provider.label + " " + ms + "ms · 준비된 답을 읽으면 내 말로 기록됩니다")
+            } catch (e: CancellationException) { throw e }
+            catch (e: GeminiException) { setAnswersBody(PLACEHOLDER); setStatus("예상 질문 실패: " + e.message) }
+            catch (_: Exception) { setAnswersBody(PLACEHOLDER); setStatus("예상 질문을 만들지 못했습니다.") }
+        }
+    }
 
     private fun asrLocale(): String = prefs.getString("asr_locale", "en-US") ?: "en-US"
     /** The other person's language = interpretation target (from the 상대 언어 setting). */
@@ -407,12 +531,12 @@ class MainActivity : ComponentActivity() {
         interpJob = lifecycleScope.launch {
             val start = SystemClock.elapsedRealtime()
             storeReady.await()
-            val conf = settings()
+            val conf = activeConf()
             var result: Interp? = null
             var note = ""
             if (conf.key.isBlank()) note = "API 키 없음"
             else try {
-                val o = GeminiClient.generateJson(conf, ReplyEngine.buildInterpretPrompt(store.style, korean, target), fast = true)
+                val o = LlmClient.json(conf, ReplyEngine.buildInterpretPrompt(store.style, korean, target, mode))
                 val (text, pron) = ReplyEngine.parseInterpret(o)
                 result = Interp(korean, text, pron, target)
             } catch (e: CancellationException) { throw e }
@@ -433,6 +557,7 @@ class MainActivity : ComponentActivity() {
             renderPanel()
             latency.text = ms.toString() + " ms"
             history.addInterpretation(korean, result.text, result.pron, target)
+            addTranscript("SJK(준비한 말): " + result.text)
             setStatus("🇰🇷→" + ReplyEngine.langName(target) + " 통역 " + ms + "ms" + (if (note.isNotBlank()) " ·$note" else "") +
                 " · 이 문장을 소리 내어 말하면 내 말로 기록됩니다")
         }
@@ -474,6 +599,7 @@ class MainActivity : ComponentActivity() {
             setStatus("🙋 내 말: " + text + " (기록할 상대 발화가 아직 없습니다) · 상대 말이었으면 [↺ 바꾸기]")
             return
         }
+        addTranscript("SJK: " + text)
         val (prev, matched) = history.setMyReply(text, source)
         last = Last(Speaker.ME, text, prev)
         val why = when (source) { "auto-match" -> "제시안과 같아서 자동 구별"; "corrected" -> "바꾸기로 정정"; else -> "내 말 모드" }
@@ -522,7 +648,10 @@ class MainActivity : ComponentActivity() {
         currentInterp = null
         last = Last(Speaker.OTHER, text)
         suggestions = emptyList()
-        history.begin(text, "", "")
+        history.begin(text, "", "", mode)
+        val context = if (mode.isInterview) interviewContext() else ""
+        val recent = transcript.toList()
+        addTranscript((if (mode == Mode.INTERVIEW_ASK) "지원자: " else "면접관: ") + text)
         other.text = text
         translation.text = ""
         setAnswersBody("답변 만드는 중…")
@@ -542,31 +671,33 @@ class MainActivity : ComponentActivity() {
             val hits = if (loaded) store.search(listOfNotNull(text, machine), 5) else emptyList()
             val searchMs = SystemClock.elapsedRealtime() - s0
 
-            val conf = settings()
+            val conf = activeConf()
+            val who = conf.provider.label
             if (conf.key.isBlank()) {
-                setAnswersBody("(Gemini API 키가 필요합니다)")
+                setAnswersBody("(" + who + " API 키가 필요합니다)")
                 history.setError("API 키 없음")
-                setStatus("Gemini API 키가 없습니다. ⚙ 설정에서 입력하세요. · 유사 예시 " + hits.size + "개")
+                setStatus(who + " API 키가 없습니다. ⚙ 설정에서 입력하세요. · 유사 예시 " + hits.size + "개")
                 return@launch
             }
+            if (mode.isInterview) setAnswersBody("🎤 " + who + "가 답을 준비하는 중…")
             val start = SystemClock.elapsedRealtime()
             try {
-                val json = GeminiClient.generateJson(conf, ReplyEngine.buildPrompt(store.style, hits, text, lang), fast = true)
+                val json = LlmClient.json(conf, ReplyEngine.buildPrompt(store.style, hits, text, lang, mode, context, recent))
                 val result = ReplyEngine.parse(json, lang)
                 if (result.translationKo.isNotEmpty()) translation.text = result.translationKo
-                if (result.lang != lang) langView.text = "감지 언어: " + lang + " → Gemini: " + result.lang + " (" + ReplyEngine.langName(result.lang) + ")"
+                if (result.lang != lang) langView.text = "감지 언어: " + lang + " → " + who + ": " + result.lang + " (" + ReplyEngine.langName(result.lang) + ")"
                 showAnswers(result)
                 val now = SystemClock.elapsedRealtime()
                 val ms = now - start
                 latency.text = ms.toString() + " ms"
                 lastOtherLang = result.lang
                 history.setSuggestions(result, ms, hits)
-                setStatus("완료 · 감지·번역 " + (s0 - t0) + "ms · 검색 " + searchMs + "ms(예시 " + hits.size + "개) · 생성 " + ms + "ms · 전체 " + (now - t0) + "ms")
+                setStatus(who + " 완료 · 감지·번역 " + (s0 - t0) + "ms · 검색 " + searchMs + "ms(예시 " + hits.size + "개) · 생성 " + ms + "ms · 전체 " + (now - t0) + "ms")
             } catch (e: CancellationException) { throw e }
             catch (e: GeminiException) {
                 setAnswersBody("(답변을 만들지 못했습니다)")
-                history.setError(e.message ?: "Gemini 오류")
-                setStatus("답변 생성 실패: " + (e.message ?: "Gemini 오류"))
+                history.setError(e.message ?: "AI 오류")
+                setStatus("답변 생성 실패: " + (e.message ?: "AI 오류"))
             } catch (_: Exception) {
                 setAnswersBody("(답변을 만들지 못했습니다)")
                 history.setError("알 수 없는 오류")
@@ -620,25 +751,62 @@ class MainActivity : ComponentActivity() {
         }
     } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
 
-    /** English: original / Korean meaning. Other languages: original / meaning / Hangul pronunciation. */
     private fun showAnswers(r: ReplyResult) {
+        currentResult = r
+        previewItems = r.next
+        renderAnswers()
+    }
+
+    /**
+     * Suggestions: English → original / Korean meaning; other languages → original / meaning / Hangul pronunciation.
+     * 면접 adds the question's intent (💡) on top and the likely next turns (🔮) below.
+     */
+    private fun renderAnswers() {
         val sb = SpannableStringBuilder()
         val sub = Color.parseColor("#4FBF8A")
-        r.answers.forEachIndexed { i, a ->
-            if (i > 0) sb.append("\n\n")
-            sb.append(if (i == 0) "① " else "② ").append(a.text)
-            fun line(s: String) {
-                if (s.isEmpty()) return
-                val from = sb.length
-                sb.append("\n   ").append(s)
-                sb.setSpan(ForegroundColorSpan(sub), from, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                sb.setSpan(RelativeSizeSpan(0.85f), from, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            }
-            if (r.lang != "ko") line(a.koMeaning)
-            if (r.lang != "en" && r.lang != "ko") line(a.koPron)
+        val dim = Color.parseColor("#8FD9B6")
+        fun line(s: String, color: Int = sub, size: Float = 0.85f) {
+            if (s.isEmpty()) return
+            val from = sb.length
+            sb.append("\n   ").append(s)
+            sb.setSpan(ForegroundColorSpan(color), from, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            sb.setSpan(RelativeSizeSpan(size), from, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
-        setAnswersBody(sb)
-        suggestions = r.answers.map { it.text }
+        val r = currentResult
+        if (r != null) {
+            if (r.tipKo.isNotEmpty()) {
+                val from = sb.length
+                sb.append("💡 ").append(r.tipKo).append("\n\n")
+                sb.setSpan(ForegroundColorSpan(dim), from, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                sb.setSpan(RelativeSizeSpan(0.8f), from, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            val mark = if (mode == Mode.INTERVIEW_ASK) listOf("Q① ", "Q② ") else listOf("① ", "② ")
+            r.answers.forEachIndexed { i, a ->
+                if (i > 0) sb.append("\n\n")
+                sb.append(mark.getOrElse(i) { "· " }).append(a.text)
+                if (r.lang != "ko") line(a.koMeaning)
+                if (r.lang != "en" && r.lang != "ko") line(a.koPron)
+            }
+        }
+        if (previewItems.isNotEmpty()) {
+            val lang = r?.lang ?: targetLang()
+            if (sb.isNotEmpty()) sb.append("\n\n")
+            val head = sb.length
+            sb.append(if (mode == Mode.INTERVIEW_ASK) "🔮 예상 질문과 지원자 답" else "🔮 다음에 나올 질문")
+            sb.setSpan(ForegroundColorSpan(dim), head, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            sb.setSpan(RelativeSizeSpan(0.8f), head, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            previewItems.forEach { n ->
+                val from = sb.length
+                sb.append("\n• ").append(n.text)
+                sb.setSpan(RelativeSizeSpan(0.85f), from, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                if (lang != "ko") line(n.koMeaning, sub, 0.75f)
+                if (lang != "en" && lang != "ko") line(n.koPron, sub, 0.75f)
+                if (n.answer.isNotEmpty()) line("💬 " + n.answer, Color.parseColor("#B8FFDA"), 0.8f)
+                if (n.answerKo.isNotEmpty() && lang != "ko") line("   " + n.answerKo, sub, 0.7f)
+            }
+        }
+        setAnswersBody(if (sb.isEmpty()) PLACEHOLDER else sb)
+        suggestions = (r?.answers?.map { it.text } ?: emptyList()) + previewItems.map { it.answer }.filter { it.isNotBlank() }
     }
 
     // ---------------- Settings / export ----------------
@@ -654,6 +822,24 @@ class MainActivity : ComponentActivity() {
             setText(current.key)
         }
         val model = EditText(this).apply { hint = "모델명"; setSingleLine(true); setText(current.model) }
+        fun label(t: String) = TextView(this).apply { text = t; setPadding(0, pad / 2, 0, 0) }
+        fun secret(h: String, v: String) = EditText(this).apply {
+            hint = h; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD; setSingleLine(true); setText(v)
+        }
+        fun plain(h: String, v: String) = EditText(this).apply { hint = h; setSingleLine(true); setText(v) }
+        val geminiLabel = label("💬 회화 모드 AI: Gemini")
+        val providerLabel = label("🎤 면접 모드 AI")
+        val providerGroup = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
+        val currentProvider = interviewConf().provider
+        Provider.values().forEach { pv ->
+            providerGroup.addView(RadioButton(this).apply {
+                id = View.generateViewId(); tag = pv.key; text = pv.label; isChecked = pv == currentProvider
+            })
+        }
+        val claudeKey = secret("Claude(Anthropic) API 키", prefs.getString("claude_key", "") ?: "")
+        val claudeModel = plain("Claude 모델 (기본 " + Provider.CLAUDE.defaultModel + ")", prefs.getString("claude_model", Provider.CLAUDE.defaultModel) ?: "")
+        val openaiKey = secret("ChatGPT(OpenAI) API 키", prefs.getString("openai_key", "") ?: "")
+        val openaiModel = plain("ChatGPT 모델 (기본 " + Provider.OPENAI.defaultModel + ")", prefs.getString("openai_model", Provider.OPENAI.defaultModel) ?: "")
         val langLabel = TextView(this).apply { text = "상대 언어 (휴대폰 마이크 인식 · 내 한국어 통역 대상)"; setPadding(0, pad / 2, 0, 0) }
         val group = RadioGroup(this)
         LOCALES.forEachIndexed { i, loc ->
@@ -664,9 +850,16 @@ class MainActivity : ComponentActivity() {
                 isChecked = loc == asrLocale()
             })
         }
-        val note = TextView(this).apply { text = "상대 발화 문장은 Gemini에 전송됩니다. 기록 " + history.count() + "건" }
+        val note = TextView(this).apply { text = "상대 발화와 면접 정보는 선택한 AI(Gemini·Claude·ChatGPT)에 전송됩니다. 기록 " + history.count() + "건" }
         val export = Button(this).apply { text = "기록 내보내기 (history.jsonl)" }
-        listOf(key, model, langLabel, group, note, export).forEach { box.addView(it) }
+        listOf(geminiLabel, key, model, providerLabel, providerGroup, claudeKey, claudeModel, openaiKey, openaiModel, langLabel, group, note, export)
+            .forEach { box.addView(it) }
+        fun enteredProvider() = Provider.of(providerGroup.findViewById<RadioButton>(providerGroup.checkedRadioButtonId)?.tag as? String)
+        fun enteredInterview(): LlmConfig = when (val pv = enteredProvider()) {
+            Provider.GEMINI -> LlmConfig(pv, key.text.toString().trim(), model.text.toString().trim().ifEmpty { GeminiClient.DEFAULT_MODEL })
+            Provider.CLAUDE -> LlmConfig(pv, claudeKey.text.toString().trim(), claudeModel.text.toString().trim().ifEmpty { pv.defaultModel })
+            Provider.OPENAI -> LlmConfig(pv, openaiKey.text.toString().trim(), openaiModel.text.toString().trim().ifEmpty { pv.defaultModel })
+        }
         val dialog = AlertDialog.Builder(this).setTitle("설정")
             .setView(android.widget.ScrollView(this).apply { addView(box) })
             .setNegativeButton("취소", null).setNeutralButton("연결 테스트", null).setPositiveButton("저장", null).create()
@@ -677,6 +870,12 @@ class MainActivity : ComponentActivity() {
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
             val v = entered()
             geminiPrefs.edit().putString("api_key", v.key).putString("model", v.model).apply()
+            prefs.edit().putString("interview_provider", enteredProvider().key)
+                .putString("claude_key", claudeKey.text.toString().trim())
+                .putString("claude_model", claudeModel.text.toString().trim().ifEmpty { Provider.CLAUDE.defaultModel })
+                .putString("openai_key", openaiKey.text.toString().trim())
+                .putString("openai_model", openaiModel.text.toString().trim().ifEmpty { Provider.OPENAI.defaultModel })
+                .apply()
             val loc = group.findViewById<RadioButton>(group.checkedRadioButtonId)?.tag as? String ?: asrLocale()
             val changed = loc != asrLocale()
             prefs.edit().putString("asr_locale", loc).apply()
@@ -688,7 +887,8 @@ class MainActivity : ComponentActivity() {
                     translatorFromKo(targetLang())?.downloadModelIfNeeded(DownloadConditions.Builder().build())?.await()
                 } catch (e: CancellationException) { throw e } catch (_: Exception) { }
             }
-            setStatus((if (v.key.isBlank()) "API 키 없음 · " else "설정 저장 · ") + "상대 언어 " + ReplyEngine.langName(loc))
+            setStatus("설정 저장 · 상대 언어 " + ReplyEngine.langName(loc) + " · 면접 AI " + enteredProvider().label +
+                (if (v.key.isBlank()) " · Gemini 키 없음" else "") + (if (enteredInterview().key.isBlank()) " · 면접 AI 키 없음" else ""))
             dialog.dismiss()
         }
         val test = dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
@@ -696,11 +896,15 @@ class MainActivity : ComponentActivity() {
             test.isEnabled = false
             note.text = "연결 테스트 중…"
             lifecycleScope.launch {
-                try { GeminiClient.test(entered()); note.text = "연결 성공" }
-                catch (e: CancellationException) { throw e }
-                catch (e: GeminiException) { note.text = "연결 실패: " + e.message }
-                catch (_: Exception) { note.text = "연결 실패: 설정을 확인하세요." }
-                finally { test.isEnabled = true }
+                suspend fun check(name: String, block: suspend () -> Unit): String = try { block(); "$name 연결 성공" }
+                    catch (e: CancellationException) { throw e }
+                    catch (e: GeminiException) { "$name 실패: " + e.message }
+                    catch (_: Exception) { "$name 실패: 설정을 확인하세요." }
+                val lines = mutableListOf(check("Gemini(회화)") { GeminiClient.test(entered()) })
+                val iv = enteredInterview()
+                if (iv.provider != Provider.GEMINI) lines += check(iv.provider.label + "(면접)") { LlmClient.test(iv) }
+                note.text = lines.joinToString("\n")
+                test.isEnabled = true
             }
         }
     }

@@ -60,7 +60,7 @@
 
 ## 부록: 휴대폰 단독 프로토타입 구현 현황
 
-별도 앱 **EvenGlass 자동번역** (`autotranslate/` 모듈, applicationId `kr.bsm.evenglass.autotranslate`, 0.3.0). 처음에는 카메라 번역 앱 EvenGlass 0.5.0 안의 [대화 도우미] 화면이었으나, 카메라 앱과 용도가 달라 분리했다. 인식 언어 기본값은 영어(en-US), 입력은 휴대폰 마이크. 아래 파일은 `autotranslate/src/main/java/kr/bsm/evenglass/autotranslate/` 기준.
+별도 앱 **EvenGlass 자동번역** (`autotranslate/` 모듈, applicationId `kr.bsm.evenglass.autotranslate`, 0.4.0). 처음에는 카메라 번역 앱 EvenGlass 0.5.0 안의 [대화 도우미] 화면이었으나, 카메라 앱과 용도가 달라 분리했다. 인식 언어 기본값은 영어(en-US), 입력은 휴대폰 마이크. 아래 파일은 `autotranslate/src/main/java/kr/bsm/evenglass/autotranslate/` 기준.
 | 설계 항목 | 0.5.0 구현 | 파일 |
 |---|---|---|
 | 입력부 | G2 대신 Android `SpeechRecognizer` 연속 인식(부분 결과), 부분 결과가 1.2초 멈추면 한 발화로 확정. 상대 언어 en-US(기본)/ja-JP/zh-CN/ru-RU/ko-KR 선택. 테스트용 텍스트 입력창 | `MainActivity.kt` |
@@ -72,4 +72,5 @@
 | 리사이클링 | `files/logs/history.jsonl`에 상대 원문·제시안 2개·내 실제 답·일치 여부 기록, 설정에서 공유 인텐트로 내보내기 | `ReplyEngine.kt`(HistoryLog) |
 | 화자 구별 (0.2.0) | [🙋 다음은 내 말] 수동 지정, 화면의 제시안을 70% 이상 그대로 읽으면 자동으로 내 말, 그 외는 상대 말. 잘못 구별되면 [↺ 바꾸기]. 내 말에는 번역·예상 답변을 만들지 않고 my_reply로만 기록 | `MainActivity.kt` |
 | 내 말 통역 (0.3.0) | [🇰🇷 한국어로 말하기] → 한국어로 작게 말하면 상대 언어(영어·일본어·중국어·러시아어) 문장 / 한글 발음 / (원래 한국어)를 G2 패널 맨 위에 표시. 그대로 읽으면 내 말로 기록 | `MainActivity.kt`, `ReplyEngine.kt` |
+| 회화/면접 탭 (0.4.0) | 상단 탭. 면접 모드는 Claude(기본, 공식 Anthropic Java SDK)·ChatGPT·Gemini 중 선택, 역할(답변자/면접관), 면접 정보, [🔮 예상 질문]으로 다음에 나올 질문과 준비 답을 미리 표시. 질문마다 의도(💡)·답 2개·다음 예상 질문(🔮) | `MainActivity.kt`, `LlmClient.kt`, `ReplyEngine.kt` |
 | 미구현 | 스트리밍 표시, 부분 결과로 선검색, 답 캐시, Gemini Nano 오프라인 대체, G2 SDK 연동 | — |

@@ -16,7 +16,15 @@ A Samsung Galaxy app that translates Japanese seen through the camera into Korea
 ## Camera app: EvenGlass 0.5.1 (`app/` module)
 - versionCode 7; versionName 0.5.1. Same as 0.4.0 functionally; the [대화 도우미] screen added in 0.5.0 was moved out to the separate app below. GeminiClient keeps the 0.5.0 refactor (shared `generateJson`).
 
-## Separate app: EvenGlass 자동번역 0.3.0 (`autotranslate/` module)
+## Separate app: EvenGlass 자동번역 0.4.0 (`autotranslate/` module)
+- **0.4.0 (versionCode 4, minSdk 26): top tabs 💬 회화 / 🎤 면접; 면접 uses Claude or ChatGPT and previews what comes next.**
+  - Tabs switch the whole screen; 회화 works as before (Gemini). 면접 shows a bar with my role (**내가 답변자** / **내가 면접관**), a **면접 정보** field (e.g. "미국 대학 교수 임용 면접, AI 교육 분야") and **[🔮 예상 질문]**.
+  - 면접 AI is chosen in ⚙ 설정: **Claude** (default, `claude-opus-5-5`, official Anthropic Java SDK `com.anthropic:anthropic-java:3.14.0`, effort low for speed, server-side refusal fallback `"default"` on models that support it), **ChatGPT** (OpenAI Chat Completions REST, default `gpt-5-mini`, `response_format: json_object`), or Gemini. Keys/models editable, stored in private prefs, connection test checks Gemini + the interview AI. No keys in code or repo.
+  - [🔮 예상 질문]: from the interview info, retrieved interview examples and the conversation so far, shows 3 likely next turns. 답변자: next interviewer questions (text / 뜻 / 발음) + 💬 a short prepared answer (+ 뜻). 면접관: questions I could ask + the candidate's likely answer.
+  - Each heard interviewer question (답변자) → 💡 question intent (Korean, one line), ① short conclusion-first answer, ② answer with grounds/experience (no invented facts), then 🔮 the 2 likely follow-up questions with prepared answers. As 면접관: candidate's answer → 💡 gist, Q① deeper follow-up, Q② verification question, 🔮 likely next candidate replies.
+  - The last 8 interview lines (면접관/지원자/SJK) are sent as context so previews don't repeat questions. Reading a prepared answer aloud counts as my words (same containment rule).
+  - Retrieval uses a separate interview store: `assets/persona/interview_pairs.jsonl` (15 **sample** Q&A pairs, ko/en/ja) → `persona_interview.db`.
+  - history.jsonl records now carry `mode` (conversation / interview_answer / interview_ask), `tip_ko` and `next_preview`.
 - **0.3.0 (versionCode 3): my quiet Korean → the other person's language with Hangul pronunciation.**
   - **[🇰🇷 한국어로 말하기]**: the recognizer switches to ko-KR for one utterance (starts listening if needed); the sentence is interpreted by Gemini (JSON `{text, ko_pron}`, polite/concise per style.md) into the 상대 언어 and shown at the top of the G2 panel as: target-language text / Hangul pronunciation / (my Korean). Shown for every target language, English included. Suggestions for the other person stay below in smaller text. No key or Gemini failure → ML Kit ko→target on-device translation (no pronunciation).
   - Korean typed in the input box (or heard while the 상대 언어 isn't Korean) is treated the same way.
@@ -72,6 +80,7 @@ A Samsung Galaxy app that translates Japanese seen through the camera into Korea
 - Allow "install unknown apps"; Play Protect may warn about a debug-signed app — choose install anyway.
 
 ## Status
+- 자동번역 0.4.0 build: result recorded after push.
 - 자동번역 0.3.0 build succeeded (Actions run 45665096057, release v0.5.1-build11). Not yet tested on a device.
 - 자동번역 0.2.0 build succeeded (Actions run 45663809086). Not yet tested on a device.
 - Two-app build succeeded (Actions run 45662252734 → release v0.5.1-build9: EvenGlass.apk ≈ 53 MB, EvenGlass-AutoTranslate.apk ≈ 34 MB). Not yet tested on a device.

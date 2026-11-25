@@ -16,7 +16,12 @@ A Samsung Galaxy app that translates Japanese seen through the camera into Korea
 ## Camera app: EvenGlass 0.5.1 (`app/` module)
 - versionCode 7; versionName 0.5.1. Same as 0.4.0 functionally; the [대화 도우미] screen added in 0.5.0 was moved out to the separate app below. GeminiClient keeps the 0.5.0 refactor (shared `generateJson`).
 
-## Separate app: EvenGlass 자동번역 0.4.0 (`autotranslate/` module)
+## Separate app: EvenGlass 자동번역 0.5.0 (`autotranslate/` module)
+- **0.5.0 (versionCode 5): answers grounded in my own data (personal data import).**
+  - ⚙ 설정 → **[개인 데이터 가져오기]** reads a `persona_bundle.json` chosen on the phone and stores it only in app-private storage (`files/persona_user/`): `style.md`, `facts.jsonl` (fact cards "주제 | 내용"), `interview_pairs.jsonl`, optional `pairs.jsonl` (conversation). Imported files replace the bundled samples; **[개인 데이터 삭제]** goes back to samples. The settings show how many cards/answers are loaded.
+  - Bundle format: `{"version":1, "style":"...", "interview_context":"...", "facts":[{"topic","text"}], "interview_pairs":[{"q","a","lang"}], "conversation_pairs":[...]}`. `interview_context` fills the 면접 정보 field.
+  - **Personal data is never committed** (this repository is public). The owner's bundle was built from their faculty application PDF outside the repo, without phone/address/email/birth date/certificate number, and delivered to them directly.
+  - Grounding: in 면접 mode all fact cards are sent (up to 80; character n-gram ranking missed paraphrased questions such as "연구 계획" in a test), in 회화 mode the top 3 matches. The prompt numbers cards F1..Fn and tells the model to use only card facts (Korean cards, answer in the interview language), and to return `evidence` card numbers. The panel shows **📎 근거: 카드 주제** under the answers, or "근거 카드 없음 · 일반적인 답". 🔮 previews also use the cards (questions an interviewer would ask from the application).
 - **0.4.0 (versionCode 4, minSdk 26): top tabs 💬 회화 / 🎤 면접; 면접 uses Claude or ChatGPT and previews what comes next.**
   - Tabs switch the whole screen; 회화 works as before (Gemini). 면접 shows a bar with my role (**내가 답변자** / **내가 면접관**), a **면접 정보** field (e.g. "미국 대학 교수 임용 면접, AI 교육 분야") and **[🔮 예상 질문]**.
   - 면접 AI is chosen in ⚙ 설정: **Claude** (default, `claude-opus-5-5`, official Anthropic Java SDK `com.anthropic:anthropic-java:3.14.0`, effort low for speed, server-side refusal fallback `"default"` on models that support it), **ChatGPT** (OpenAI Chat Completions REST, default `gpt-5-mini`, `response_format: json_object`), or Gemini. Keys/models editable, stored in private prefs, connection test checks Gemini + the interview AI. No keys in code or repo.
@@ -80,6 +85,7 @@ A Samsung Galaxy app that translates Japanese seen through the camera into Korea
 - Allow "install unknown apps"; Play Protect may warn about a debug-signed app — choose install anyway.
 
 ## Status
+- 자동번역 0.5.0 build: result recorded after push.
 - 자동번역 0.4.0 build succeeded on the first try (Actions run 45667713990, release v0.5.1-build12; APK ≈ 45 MB with the Anthropic SDK). Not yet tested on a device.
 - 자동번역 0.3.0 build succeeded (Actions run 45665096057, release v0.5.1-build11). Not yet tested on a device.
 - 자동번역 0.2.0 build succeeded (Actions run 45663809086). Not yet tested on a device.

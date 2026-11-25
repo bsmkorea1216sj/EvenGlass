@@ -41,8 +41,12 @@ import com.google.mlkit.nl.translate.Translator
 import com.google.mlkit.nl.translate.TranslatorOptions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.withContext
+import java.io.File
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeoutOrNull
@@ -83,14 +87,26 @@ class MainActivity : ComponentActivity() {
     private val prefs by lazy { getSharedPreferences("reply_assist", MODE_PRIVATE) }
     private val convStore by lazy { PersonaStore(applicationContext) }
     private val interviewStore by lazy { PersonaStore(applicationContext, "persona/interview_pairs.jsonl", "persona_interview.db") }
+    /** My CV facts ("주제 | 내용"), imported on the phone; empty until then. */
+    private val factStore by lazy { PersonaStore(applicationContext, "persona/facts.jsonl", "persona_facts.db") }
     private val store get() = if (mode.isInterview) interviewStore else convStore
+    /** Fact cards sent with the latest request, to show which ones an answer used. */
+    private var currentFacts: List<Hit> = emptyList()
     private val history by lazy { HistoryLog(applicationContext) }
     private val langId by lazy { LanguageIdentification.getClient() }
     private val translators = HashMap<String, Translator>()
-    private val storeReady by lazy {
-        lifecycleScope.async(Dispatchers.IO) {
-            try { convStore.load(); interviewStore.load(); true } catch (_: Exception) { false }
+    private var storeReady: Deferred<Boolean> = CompletableDeferred(false)
+
+    /** (Re)loads sample/imported persona data into SQLite + the in-memory search index. */
+    private fun loadStores() {
+        storeReady = lifecycleScope.async(Dispatchers.IO) {
+            try { convStore.load(); interviewStore.load(); factStore.load(); true } catch (_: Exception) { false }
         }
+    }
+
+    private val pickBundle = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) importBundle(uri)
+    }
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -164,6 +180,7 @@ class MainActivity : ComponentActivity() {
         findViewById<Button>(R.id.send).setOnClickListener { submitTyped() }
         input.setOnEditorActionListener { _, id, _ -> if (id == EditorInfo.IME_ACTION_SEND) { submitTyped(); true } else false }
         findViewById<Button>(R.id.settings).setOnClickListener { showSettings() }
+        loadStores()
         updateAsrLabel()
         setMode(Mode.of(prefs.getString("mode", Mode.CONVERSATION.key)), initial = true)
 
@@ -254,6 +271,14 @@ class MainActivity : ComponentActivity() {
         })
     }
 
+    /**
+     * Fact cards sent as grounding. 면접: all cards while the set is small (a CV fits in one prompt and
+     * character-n-gram ranking misses paraphrased questions); otherwise / 회화: the best matches.
+     */
+    private fun relevantFacts(queries: List<String>): List<Hit> =
+        if (mode.isInterview && factStore.size <= ALL_FACTS_LIMIT) factStore.all()
+        else factStore.search(queries, if (mode.isInterview) 12 else 3).filter { it.score > 0.03 }
+
     private fun interviewContext(): String {
         val c = contextInput.text.toString().trim()
         prefs.edit().putString("interview_context", c).apply()
@@ -277,8 +302,10 @@ class MainActivity : ComponentActivity() {
             val start = SystemClock.elapsedRealtime()
             storeReady.await()
             val hits = if (context.isNotBlank()) interviewStore.search(listOf(context), 5) else emptyList()
+            val facts = relevantFacts(listOf(context) + transcript.toList().takeLast(2))
+            currentFacts = facts
             try {
-                val o = LlmClient.json(conf, ReplyEngine.buildPreviewPrompt(interviewStore.style, hits, context, transcript.toList(), lang, mode))
+                val o = LlmClient.json(conf, ReplyEngine.buildPreviewPrompt(interviewStore.style, hits, context, transcript.toList(), lang, mode, facts))
                 previewItems = ReplyEngine.parseNext(o, lang)
                 if (previewItems.isEmpty()) throw GeminiException("예상 질문이 비어 있습니다.")
                 currentResult = null
@@ -669,6 +696,8 @@ class MainActivity : ComponentActivity() {
             val loaded = storeReady.await()
             val s0 = SystemClock.elapsedRealtime()
             val hits = if (loaded) store.search(listOfNotNull(text, machine), 5) else emptyList()
+            val facts = if (!loaded) emptyList<Hit>() else relevantFacts(listOfNotNull(text, machine))
+            currentFacts = facts
             val searchMs = SystemClock.elapsedRealtime() - s0
 
             val conf = activeConf()
@@ -682,7 +711,7 @@ class MainActivity : ComponentActivity() {
             if (mode.isInterview) setAnswersBody("🎤 " + who + "가 답을 준비하는 중…")
             val start = SystemClock.elapsedRealtime()
             try {
-                val json = LlmClient.json(conf, ReplyEngine.buildPrompt(store.style, hits, text, lang, mode, context, recent))
+                val json = LlmClient.json(conf, ReplyEngine.buildPrompt(store.style, hits, text, lang, mode, context, recent, facts))
                 val result = ReplyEngine.parse(json, lang)
                 if (result.translationKo.isNotEmpty()) translation.text = result.translationKo
                 if (result.lang != lang) langView.text = "감지 언어: " + lang + " → " + who + ": " + result.lang + " (" + ReplyEngine.langName(result.lang) + ")"
@@ -787,6 +816,18 @@ class MainActivity : ComponentActivity() {
                 if (r.lang != "ko") line(a.koMeaning)
                 if (r.lang != "en" && r.lang != "ko") line(a.koPron)
             }
+            val used = r.evidence.mapNotNull { currentFacts.getOrNull(it - 1) }.map { ReplyEngine.factTopic(it) }.distinct()
+            if (used.isNotEmpty()) {
+                val from = sb.length
+                sb.append("\n📎 근거: ").append(used.joinToString(" · "))
+                sb.setSpan(ForegroundColorSpan(dim), from, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                sb.setSpan(RelativeSizeSpan(0.75f), from, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            } else if (mode.isInterview && factStore.size > 0) {
+                val from = sb.length
+                sb.append("\n📎 근거 카드 없음 · 일반적인 답")
+                sb.setSpan(ForegroundColorSpan(dim), from, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                sb.setSpan(RelativeSizeSpan(0.75f), from, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
         }
         if (previewItems.isNotEmpty()) {
             val lang = r?.lang ?: targetLang()
@@ -852,7 +893,10 @@ class MainActivity : ComponentActivity() {
         }
         val note = TextView(this).apply { text = "상대 발화와 면접 정보는 선택한 AI(Gemini·Claude·ChatGPT)에 전송됩니다. 기록 " + history.count() + "건" }
         val export = Button(this).apply { text = "기록 내보내기 (history.jsonl)" }
-        listOf(geminiLabel, key, model, providerLabel, providerGroup, claudeKey, claudeModel, openaiKey, openaiModel, langLabel, group, note, export)
+        val personalLabel = label("👤 개인 데이터: " + personalSummary())
+        val importBtn = Button(this).apply { text = "개인 데이터 가져오기 (persona_bundle.json)" }
+        val clearBtn = Button(this).apply { text = "개인 데이터 삭제 (샘플로 되돌리기)" }
+        listOf(geminiLabel, key, model, providerLabel, providerGroup, claudeKey, claudeModel, openaiKey, openaiModel, langLabel, group, personalLabel, importBtn, clearBtn, note, export)
             .forEach { box.addView(it) }
         fun enteredProvider() = Provider.of(providerGroup.findViewById<RadioButton>(providerGroup.checkedRadioButtonId)?.tag as? String)
         fun enteredInterview(): LlmConfig = when (val pv = enteredProvider()) {
@@ -867,6 +911,21 @@ class MainActivity : ComponentActivity() {
         dialog.show()
         fun entered() = GeminiSettings(key.text.toString().trim(), model.text.toString().trim().ifEmpty { GeminiClient.DEFAULT_MODEL })
         export.setOnClickListener { dialog.dismiss(); exportHistory() }
+        importBtn.setOnClickListener {
+            dialog.dismiss()
+            try { pickBundle.launch(arrayOf("application/json", "text/plain", "application/octet-stream", "*/*")) }
+            catch (_: Exception) { setStatus("파일 선택 화면을 열 수 없습니다.") }
+        }
+        clearBtn.setOnClickListener {
+            AlertDialog.Builder(this).setMessage("가져온 개인 데이터(경력 카드·면접 답·말투)를 이 휴대폰에서 지웁니다.")
+                .setNegativeButton("취소", null)
+                .setPositiveButton("삭제") { _, _ ->
+                    PersonaStore.userDir(this).deleteRecursively()
+                    loadStores()
+                    dialog.dismiss()
+                    setStatus("개인 데이터를 지웠습니다. 샘플 데이터로 동작합니다.")
+                }.show()
+        }
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
             val v = entered()
             geminiPrefs.edit().putString("api_key", v.key).putString("model", v.model).apply()
@@ -909,6 +968,67 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun personalSummary(): String {
+        val dir = PersonaStore.userDir(this)
+        if (!File(dir, "facts.jsonl").isFile && !File(dir, "interview_pairs.jsonl").isFile) return "없음 (샘플 사용 중)"
+        fun lines(n: String) = File(dir, n).let { f -> if (f.isFile) f.readLines().count { it.isNotBlank() } else 0 }
+        return "경력 카드 " + lines("facts.jsonl") + "개 · 면접 답 " + lines("interview_pairs.jsonl") + "개" +
+            (prefs.getString("persona_imported_at", null)?.let { " · $it 가져옴" } ?: "")
+    }
+
+    /**
+     * Imports persona_bundle.json: {"version":1, "style": "...", "interview_context": "...",
+     * "facts":[{"topic","text"}], "interview_pairs":[{"q","a","lang"}], "conversation_pairs":[...]}.
+     * Written to app-private storage only.
+     */
+    private fun importBundle(uri: android.net.Uri) {
+        lifecycleScope.launch {
+            try {
+                val counts = withContext(Dispatchers.IO) {
+                    val raw = contentResolver.openInputStream(uri)?.use { input ->
+                        val bytes = input.readBytes()
+                        if (bytes.size > 5_000_000) throw IllegalArgumentException("too large")
+                        String(bytes, Charsets.UTF_8)
+                    } ?: throw IllegalArgumentException("empty")
+                    val o = org.json.JSONObject(raw)
+                    val facts = o.optJSONArray("facts") ?: org.json.JSONArray()
+                    val interview = o.optJSONArray("interview_pairs") ?: org.json.JSONArray()
+                    val conv = o.optJSONArray("conversation_pairs")
+                    if (facts.length() == 0 && interview.length() == 0) throw IllegalArgumentException("no data")
+                    val dir = PersonaStore.userDir(this@MainActivity).apply { deleteRecursively(); mkdirs() }
+                    o.optString("style").takeIf { it.isNotBlank() }?.let { File(dir, "style.md").writeText(it) }
+                    File(dir, "facts.jsonl").writeText(buildString {
+                        for (i in 0 until facts.length()) {
+                            val f = facts.optJSONObject(i) ?: continue
+                            val text = f.optString("text").trim()
+                            if (text.isEmpty()) continue
+                            val topic = f.optString("topic").trim().ifEmpty { "사실" }
+                            append(org.json.JSONObject().put("q", "$topic | $text").put("a", text).put("lang", "ko").toString()).append('\n')
+                        }
+                    })
+                    fun writePairs(arr: org.json.JSONArray, name: String) = File(dir, name).writeText(buildString {
+                        for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { append(it.toString()).append('\n') }
+                    })
+                    if (interview.length() > 0) writePairs(interview, "interview_pairs.jsonl")
+                    if (conv != null && conv.length() > 0) writePairs(conv, "pairs.jsonl")
+                    Triple(facts.length(), interview.length(), o.optString("interview_context").trim())
+                }
+                if (counts.third.isNotEmpty()) {
+                    contextInput.setText(counts.third)
+                    prefs.edit().putString("interview_context", counts.third).apply()
+                }
+                prefs.edit().putString("persona_imported_at",
+                    java.text.SimpleDateFormat("M/d HH:mm", java.util.Locale.KOREA).format(java.util.Date())).apply()
+                loadStores()
+                storeReady.await()
+                setStatus("👤 개인 데이터 가져오기 완료 · 경력 카드 " + counts.first + "개 · 면접 답 " + counts.second + "개 · 면접 모드에서 근거로 씁니다")
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) {
+                setStatus("개인 데이터 파일을 읽지 못했습니다. persona_bundle.json 형식인지 확인하세요.")
+            }
+        }
+    }
+
     private fun exportHistory() {
         if (awaitingMyReply) setMyReplyMode(false)
         history.flush()
@@ -943,6 +1063,7 @@ class MainActivity : ComponentActivity() {
         /** Shorter utterances ("Yes", "OK") are never auto-assigned to me; use [↺ 바꾸기] if needed. */
         private const val MIN_AUTO_CHARS = 6
         private val LOCALES = listOf("en-US", "ja-JP", "zh-CN", "ru-RU", "ko-KR")
+        private const val ALL_FACTS_LIMIT = 80
         private const val PLACEHOLDER = "G2 미리보기 · 예상 답변이 여기에 표시됩니다."
         private val HANGUL = Regex("[\\uac00-\\ud7a3]")
     }

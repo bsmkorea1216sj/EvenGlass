@@ -5,6 +5,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONObject
+import java.io.File
 import java.security.MessageDigest
 import java.text.Normalizer
 import kotlin.math.ln
@@ -24,7 +25,9 @@ internal data class Hit(val pair: PersonaPair, val score: Double)
 internal class PersonaStore(
     private val context: Context,
     private val pairsAsset: String = "persona/pairs.jsonl",
-    dbName: String = "persona.db"
+    dbName: String = "persona.db",
+    /** File name inside files/persona_user/ that, once imported, replaces the bundled sample asset. */
+    private val userFile: String = pairsAsset.substringAfterLast('/')
 ) {
     private val helper = object : SQLiteOpenHelper(context, dbName, null, 1) {
         override fun onCreate(db: SQLiteDatabase) {
@@ -43,8 +46,13 @@ internal class PersonaStore(
 
     /** Blocking; call off the main thread. */
     fun load() {
-        style = context.assets.open("persona/style.md").bufferedReader().use { it.readText() }.trim()
-        val raw = context.assets.open(pairsAsset).bufferedReader().use { it.readText() }
+        val userDir = userDir(context)
+        val userStyle = File(userDir, "style.md")
+        style = (if (userStyle.isFile) userStyle.readText()
+            else context.assets.open("persona/style.md").bufferedReader().use { it.readText() }).trim()
+        val userPairs = File(userDir, userFile)
+        val raw = if (userPairs.isFile) userPairs.readText()
+            else try { context.assets.open(pairsAsset).bufferedReader().use { it.readText() } } catch (_: java.io.IOException) { "" }
         val hash = MessageDigest.getInstance("SHA-256").digest(raw.toByteArray())
             .joinToString("") { "%02x".format(it) }
         val db = helper.writableDatabase
@@ -83,6 +91,9 @@ internal class PersonaStore(
         pairs = list
     }
 
+    /** Every pair (for small fact sets that fit in one prompt). */
+    fun all(): List<Hit> = pairs.map { Hit(it, 1.0) }
+
     /** Top-k pairs by n-gram cosine similarity; each query string is scored and the best is kept per pair. */
     fun search(queries: List<String>, k: Int = 5): List<Hit> {
         if (pairs.isEmpty()) return emptyList()
@@ -100,6 +111,9 @@ internal class PersonaStore(
     }
 
     companion object {
+        /** Personal data imported on the phone (never part of the APK or the repository). */
+        fun userDir(context: Context) = File(context.filesDir, "persona_user")
+
         fun normalize(s: String): String =
             Normalizer.normalize(s, Normalizer.Form.NFKC).lowercase()
                 .replace(Regex("[\\p{P}\\p{S}]"), " ").replace(Regex("\\s+"), " ").trim()
